@@ -1,0 +1,18 @@
+services:
+  telegram-promo:
+    # Published by the CI workflow (credential-free image — credentials come
+    # from the environment variables below)
+    image: ghcr.io/brook-sys/tele-interdivu:latest
+    # Local fallback build (docker compose up --build)
+    build:
+      context: .
+      args:
+        TELEGRAM_API_ID: ${TELEGRAM_API_ID:-1234567}
+        TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-0123456789abcdef0123456789abcdef}
+    container_name: telegram-promo
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?Set TELEGRAM_API_ID in .env}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?Set TELEGRAM_API_HASH in .env}
+    ports:
+      - "8090:80"

@@ -118,7 +118,7 @@ export const INITIAL_SHARED_STATE: SharedState = {
 };
 
 export const INITIAL_GLOBAL_STATE: GlobalState = {
-  cacheVersion: 5,
+  cacheVersion: 6,
   isInited: true,
   attachMenu: { bots: {} },
   passcode: {},
@@ -160,6 +160,10 @@ export const INITIAL_GLOBAL_STATE: GlobalState = {
 
   peers: {
     profilePhotosById: {},
+  },
+
+  promo: {
+    byUserId: {},
   },
 
   chats: {

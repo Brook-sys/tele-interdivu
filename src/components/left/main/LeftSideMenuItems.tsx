@@ -45,6 +45,8 @@ type OwnProps = {
   onSelectSettings: NoneToVoidFunction;
   onSelectContacts: NoneToVoidFunction;
   onSelectArchived: NoneToVoidFunction;
+  onSelectPromoPanel: NoneToVoidFunction;
+  onSelectPromoManage: NoneToVoidFunction;
   onBotMenuOpened: NoneToVoidFunction;
   onBotMenuClosed: NoneToVoidFunction;
   footer?: string;
@@ -71,6 +73,8 @@ const LeftSideMenuItems = ({
   onSelectArchived,
   onSelectContacts,
   onSelectSettings,
+  onSelectPromoPanel,
+  onSelectPromoManage,
   onBotMenuOpened,
   onBotMenuClosed,
   footer,
@@ -183,6 +187,20 @@ const LeftSideMenuItems = ({
       >
         {lang('MenuContacts')}
       </MenuItem>
+      <MenuSeparator />
+      <MenuItem
+        icon="megaphone-filled"
+        onClick={onSelectPromoPanel}
+      >
+        {lang('PromoPanelTitle')}
+      </MenuItem>
+      <MenuItem
+        icon="folder-tabs-group"
+        onClick={onSelectPromoManage}
+      >
+        {lang('PromoMenuManage')}
+      </MenuItem>
+      <MenuSeparator />
       {bots.map((bot) => (
         <AttachBotItem
           bot={bot}

@@ -2298,6 +2298,34 @@ export interface LangPair {
   'SettingsPerformanceDesc': undefined;
   'SettingsStickersDesc': undefined;
   'SettingsSessionsDesc': undefined;
+  'PromoPanelTitle': undefined;
+  'PromoMenuManage': undefined;
+  'PromoCategoryFree': undefined;
+  'PromoCategorySlowmode': undefined;
+  'PromoCategoryStars': undefined;
+  'PromoEmptySection': undefined;
+  'PromoSetupTitle': undefined;
+  'PromoSetupFolderHint': undefined;
+  'PromoSetupOpenSettings': undefined;
+  'PromoSettingsTitle': undefined;
+  'PromoSettingsFolder': undefined;
+  'PromoSettingsFolderNone': undefined;
+  'PromoSettingsSectionOrder': undefined;
+  'PromoSettingsSortBy': undefined;
+  'PromoSortAlphabetical': undefined;
+  'PromoSortStarsCost': undefined;
+  'PromoSortSlowmodeRemaining': undefined;
+  'PromoSettingsExport': undefined;
+  'PromoSettingsImport': undefined;
+  'PromoSettingsImportError': undefined;
+  'PromoManageSearchPlaceholder': undefined;
+  'PromoManageSelectAll': undefined;
+  'PromoManageDeselectAll': undefined;
+  'PromoManageHideSelected': undefined;
+  'PromoManageShowSelected': undefined;
+  'PromoManageNoMatches': undefined;
+  'PromoManageNoFolder': undefined;
+  'PromoManageDone': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4544,6 +4572,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'PollModalAddMoreText': {
+    'count': V;
+  };
+  'PromoManageSelectedCount': {
     'count': V;
   };
 }

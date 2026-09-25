@@ -7,6 +7,8 @@ import {
   MEDIA_CACHE_NAME,
   MEDIA_CACHE_NAME_AVATARS,
   MEDIA_PROGRESSIVE_CACHE_NAME,
+  TELEGRAM_API_HASH,
+  TELEGRAM_API_ID,
 } from '../../../config';
 import { updateAppBadge } from '../../../util/appBadge';
 import { toCredentialRequestOptions } from '../../../util/browser/passkeys';
@@ -83,6 +85,8 @@ addActionHandler('initApi', (global, actions): ActionReturnType => {
     isTestServerRequested: hasTestParam,
     accountIds,
     hasPasskeySupport: IS_WEBAUTHN_SUPPORTED,
+    apiId: TELEGRAM_API_ID,
+    apiHash: TELEGRAM_API_HASH,
   });
 
   void setShouldEnableDebugLog(Boolean(shouldCollectDebugLogs));

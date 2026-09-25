@@ -34,6 +34,8 @@ import Transition from '../ui/Transition';
 import ArchivedChats from './ArchivedChats.async';
 import LeftMain from './main/LeftMain';
 import NewChat from './newChat/NewChat.async';
+import PromoManageGroups from './promo/PromoManageGroups';
+import PromoPanel from './promo/PromoPanel';
 import Settings from './settings/Settings.async';
 
 import './LeftColumn.scss';
@@ -75,6 +77,11 @@ enum ContentType {
   NewGroup,
 
   NewChannel,
+
+  // eslint-disable-next-line @typescript-eslint/no-shadow
+  PromoPanel,
+
+  PromoManage,
 }
 
 const RENDER_COUNT = Object.keys(ContentType).length / 2;
@@ -138,6 +145,12 @@ function LeftColumn({
     case LeftColumnContent.NewGroupStep1:
     case LeftColumnContent.NewGroupStep2:
       contentType = ContentType.NewGroup;
+      break;
+    case LeftColumnContent.PromoPanel:
+      contentType = ContentType.PromoPanel;
+      break;
+    case LeftColumnContent.PromoManage:
+      contentType = ContentType.PromoManage;
       break;
   }
 
@@ -539,6 +552,20 @@ function LeftColumn({
             isActive={isActive}
             content={contentKey}
             animationLevel={animationLevel}
+            onReset={handleReset}
+          />
+        );
+      case ContentType.PromoPanel:
+        return (
+          <PromoPanel
+            isActive={isActive}
+            onReset={handleReset}
+          />
+        );
+      case ContentType.PromoManage:
+        return (
+          <PromoManageGroups
+            isActive={isActive}
             onReset={handleReset}
           />
         );

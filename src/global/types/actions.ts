@@ -76,6 +76,7 @@ import type { ApiCredentials } from '../../components/payment/PaymentModal';
 import type { FoldersActions } from '../../hooks/reducers/useFoldersReducer';
 import type { ReducerAction } from '../../hooks/useReducer';
 import type { P2pMessage } from '../../lib/vibecalls';
+import type { PromoSettings } from './promo';
 import type {
   AccountSettings,
   AttachmentCompression,
@@ -389,6 +390,16 @@ export interface ActionPayloads {
     idsToRemove: number[];
     idsToAdd: number[];
   } & WithTabId;
+  requestPromoStatuses: {
+    chatIds: string[];
+  };
+  setPromoChatsVisibility: {
+    chatIds: string[];
+    isVisible: boolean;
+  };
+  setPromoSettings: {
+    patch: Partial<PromoSettings>;
+  };
   toggleIsProtected: {
     chatId: string;
     isProtected: boolean;

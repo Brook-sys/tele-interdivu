@@ -1,0 +1,12 @@
+# Build-only and local-only files
+.git
+.github
+node_modules
+dist
+.cache
+tests
+docs
+*.md
+.env
+.env.*
+!.env.example

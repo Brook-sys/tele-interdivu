@@ -1,0 +1,88 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.scrollable {
+  overflow-y: auto;
+  flex: 1;
+  padding: 0 1rem 1.5rem;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 1.25rem;
+}
+
+.sectionLabel {
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-list-icon);
+}
+
+.folderHint {
+  font-size: 0.875rem;
+  color: var(--color-list-icon);
+}
+
+.selectedFolderName {
+  font-size: 0.9375rem;
+  font-weight: var(--font-weight-medium);
+}
+
+.categoryRow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+
+  padding: 0.5rem 0.25rem;
+  border-radius: 0.5rem;
+
+  background: var(--color-background-secondary);
+}
+
+.categoryMain,
+.categorySort {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.categoryIcon {
+  font-size: 1.125rem;
+  color: var(--color-list-icon);
+}
+
+.categoryTitle {
+  flex: 1;
+  font-weight: var(--font-weight-medium);
+}
+
+.categoryOrderButtons {
+  display: flex;
+  gap: 0.125rem;
+}
+
+.sortLabel {
+  font-size: 0.8125rem;
+  color: var(--color-list-icon);
+}
+
+.importExportSection {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.importInput {
+  display: none;
+}
+
+.importError {
+  width: 100%;
+  font-size: 0.8125rem;
+  color: var(--color-danger);
+}

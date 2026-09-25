@@ -1,0 +1,54 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.headerButtons {
+  display: flex;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.scrollable {
+  overflow-y: auto;
+  flex: 1;
+  padding-bottom: 1.5rem;
+}
+
+.section {
+  padding-top: 0.75rem;
+}
+
+.sectionHeader {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.375rem 1.25rem 0.25rem;
+}
+
+.sectionIcon {
+  font-size: 1rem;
+  color: var(--color-list-icon);
+}
+
+.sectionTitle {
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.sectionCount {
+  padding: 0.0625rem 0.5rem;
+  border-radius: 0.75rem;
+
+  font-size: 0.75rem;
+  color: var(--color-list-icon);
+
+  background: var(--color-active);
+}
+
+.emptyText {
+  padding: 0.25rem 1.25rem 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--color-list-icon);
+}

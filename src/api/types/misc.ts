@@ -32,6 +32,9 @@ export interface ApiInitialArgs {
   isTestServerRequested?: boolean;
   accountIds?: string[];
   hasPasskeySupport?: boolean;
+  // Runtime credentials override, forwarded to the worker (falls back to build-time)
+  apiId?: number;
+  apiHash?: string;
 }
 
 export type ApiPasskeyOption = {

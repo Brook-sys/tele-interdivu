@@ -286,6 +286,11 @@ function unsafeMigrateCache(cached: GlobalState, initialState: GlobalState) {
     ...cached.chatFolders,
   };
 
+  cached.promo = {
+    ...initialState.promo,
+    ...cached.promo,
+  };
+
   if (!cached.chats.similarChannelsById) {
     cached.chats.similarChannelsById = initialState.chats.similarChannelsById;
   }
@@ -502,6 +507,12 @@ function unsafeMigrateCache(cached: GlobalState, initialState: GlobalState) {
     cached.cacheVersion = 5;
   }
 
+  if (cached.cacheVersion < 6) {
+    // Adds the `promo` slice (custom promo panel state)
+    cached.promo = initialState.promo;
+    cached.cacheVersion = 6;
+  }
+
   if (!cached.auth) {
     cached.auth = initialState.auth;
     cached.auth.rememberMe = untypedCached.rememberMe;
@@ -575,6 +586,7 @@ function reduceGlobal<T extends GlobalState>(global: T) {
       'cacheVersion',
       'appConfig',
       'config',
+      'promo',
       'auth',
       'attachMenu',
       'currentUserId',

@@ -308,6 +308,8 @@ export enum LeftColumnContent {
   NewChannelStep2,
   NewGroupStep1,
   NewGroupStep2,
+  PromoPanel,
+  PromoManage,
 }
 
 export enum GlobalSearchContent {

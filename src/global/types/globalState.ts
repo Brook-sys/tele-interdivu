@@ -78,6 +78,7 @@ import type {
   WebPageMediaSize,
 } from '../../types';
 import type { RegularLangFnParameters } from '../../util/localization';
+import type { PromoState } from './promo';
 import type { SharedState } from './sharedState';
 import type { TabState } from './tabState';
 
@@ -204,6 +205,8 @@ export type GlobalState = {
   peers: {
     profilePhotosById: Record<string, ApiPeerPhotos>;
   };
+
+  promo: PromoState;
 
   chats: {
     // TODO Replace with `Partial<Record>` to properly handle missing keys

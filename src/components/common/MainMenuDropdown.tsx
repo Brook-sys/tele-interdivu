@@ -55,6 +55,14 @@ const LeftSideMenuDropdown = ({
     closeForumPanel();
   });
 
+  const handleSelectPromoPanel = useLastCallback(() => {
+    openLeftColumnContent({ contentKey: LeftColumnContent.PromoPanel });
+  });
+
+  const handleSelectPromoManage = useLastCallback(() => {
+    openLeftColumnContent({ contentKey: LeftColumnContent.PromoManage });
+  });
+
   return (
     <DropdownMenu
       trigger={trigger}
@@ -76,6 +84,8 @@ const LeftSideMenuDropdown = ({
         onSelectArchived={handleSelectArchived}
         onSelectContacts={handleSelectContacts}
         onSelectSettings={handleSelectSettings}
+        onSelectPromoPanel={handleSelectPromoPanel}
+        onSelectPromoManage={handleSelectPromoManage}
         onBotMenuOpened={markBotMenuOpen}
         onBotMenuClosed={unmarkBotMenuOpen}
         footer={`${APP_NAME} ${versionString}`}

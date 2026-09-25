@@ -38,8 +38,23 @@ export const DEBUG_GRAMJS = false;
 export const PAGE_TITLE = import.meta.env.TG_APP_TITLE;
 export const PAGE_TITLE_TAURI = 'Telegram Air';
 export const INACTIVE_MARKER = '[Inactive]';
-export const TELEGRAM_API_ID = Number(import.meta.env.TG_TELEGRAM_API_ID);
-export const TELEGRAM_API_HASH = import.meta.env.TG_TELEGRAM_API_HASH;
+
+declare global {
+  interface Window {
+    // Set by `public/config.js` so deployments can inject credentials at runtime
+    __TELEGRAM_CREDS__?: {
+      id?: number | string;
+      hash?: string;
+    };
+  }
+}
+
+// Workers import this module too and have no `window`; the runtime override is
+// passed to them through `ApiInitialArgs` instead
+const runtimeCredentials = typeof window !== 'undefined' ? window.__TELEGRAM_CREDS__ : undefined;
+
+export const TELEGRAM_API_ID = Number(runtimeCredentials?.id ?? import.meta.env.TG_TELEGRAM_API_ID);
+export const TELEGRAM_API_HASH = runtimeCredentials?.hash ?? import.meta.env.TG_TELEGRAM_API_HASH;
 export const TEST_SESSION = import.meta.env.TG_TEST_SESSION;
 
 export const DEBUG_PAYMENT_SMART_GLOCAL = false;

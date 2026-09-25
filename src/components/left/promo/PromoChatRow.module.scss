@@ -1,0 +1,57 @@
+.row {
+  cursor: pointer;
+  user-select: none;
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  margin: 0 0.5rem;
+  padding: 0.375rem 1rem;
+  border-radius: 0.5rem;
+
+  &:hover {
+    background: var(--color-hover);
+  }
+}
+
+.avatar {
+  flex-shrink: 0;
+}
+
+.title {
+  overflow: hidden;
+  flex: 1;
+
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slowmodeBadge,
+.starsBadge {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.25rem;
+  align-items: center;
+
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.75rem;
+
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-medium);
+}
+
+.slowmodeBadge {
+  color: var(--color-list-icon);
+  background: var(--color-active);
+}
+
+.starsBadge {
+  color: var(--color-orange);
+  background: var(--color-active);
+}
+
+.badgeIcon {
+  font-size: 1rem;
+}

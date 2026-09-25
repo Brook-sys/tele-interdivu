@@ -69,6 +69,7 @@ import {
   updateScheduledMessage,
 } from '../../reducers';
 import { addUnreadPollVotes } from '../../reducers/polls';
+import { recordPromoOutgoing } from '../../reducers/promo';
 import { addUnreadReactions, removeUnreadReactions } from '../../reducers/reactions';
 import { updateTabState } from '../../reducers/tabs';
 import {
@@ -231,6 +232,7 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       const {
         chatId, id, message, shouldForceReply, wasDrafted, poll, webPages,
       } = update;
+      global = recordPromoOutgoing(global, chatId, message);
       const chat = selectChat(global, chatId);
       const isLocal = isMessageLocal(message);
       const threadId = selectThreadIdFromMessage(global, message) || MAIN_THREAD_ID;
