@@ -5,6 +5,7 @@ node_modules
 src/lib/gramjs/build/
 build-contest/
 tests/
+!tests/init.ts
 .idea
 *.iml
 dev/perf/screenshot*
