@@ -1,10 +1,12 @@
 # syntax=docker/dockerfile:1
 
 # Stage 1 — build the static bundle
-FROM node:24-alpine AS builder
+# Debian-based (glibc): the rolldown native binding misbehaves on musl (EISDIR)
+FROM node:24-slim AS builder
 
 # Build tools for native deps if any appear during npm install
-RUN apk add --no-cache python3 make g++
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
