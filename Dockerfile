@@ -13,7 +13,9 @@ WORKDIR /app
 RUN npm i -g npm@10.9.0
 
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+# `npm install` (not `ci`): the upstream lock file is not in sync with its
+# package.json — the upstream itself installs with `npm i`
+RUN npm install --no-audit --no-fund
 
 COPY . .
 

@@ -116,3 +116,7 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
 26. **Arquitetura da autenticação do upstream (mapeada):** main thread →
     `initApi(initialArgs)` → postMessage → worker `TelegramClient(apiId, apiHash)`.
     O override não poderia viver só no `window`; precisava atravessar essa fronteira.
+27. **`npm ci` não funciona neste repo** (lock do upstream dessincronizado do
+    `package.json` — o próprio upstream instala com `npm i`; descoberto no CI).
+    CI e Dockerfile usam `npm install`. Se quiser `npm ci`, regenere o lock e
+    aceite o churn no rebase.
