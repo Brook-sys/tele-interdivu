@@ -1,14 +1,19 @@
-import { memo } from '../../../lib/teact/teact';
+import { memo, useCallback } from '../../../lib/teact/teact';
 import { getActions } from '../../../global';
 
 import type { ApiChat } from '../../../api/types';
+import type { GlobalState } from '../../../global/types';
 
+import { getIsChatMuted } from '../../../global/helpers/notifications';
+import { selectNotifyDefaults, selectNotifyException } from '../../../global/selectors';
 import { formatCountdownSeconds } from '../../../util/promo/countdownFormat';
 
+import useSelector from '../../../hooks/data/useSelector';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Avatar from '../../common/Avatar';
 import Icon from '../../common/icons/Icon';
+import ChatBadge from '../main/ChatBadge';
 
 import styles from './PromoChatRow.module.scss';
 
@@ -19,6 +24,12 @@ type OwnProps = {
 
 const PromoChatRow = ({ chat, slowmodeRemaining }: OwnProps) => {
   const { openChat } = getActions();
+
+  const isMutedSelector = useCallback((global: GlobalState) => {
+    return getIsChatMuted(chat, selectNotifyDefaults(global), selectNotifyException(global, chat.id));
+  }, [chat]);
+
+  const isMuted = useSelector(isMutedSelector);
 
   const handleClick = useLastCallback(() => {
     openChat({ id: chat.id });
@@ -47,6 +58,7 @@ const PromoChatRow = ({ chat, slowmodeRemaining }: OwnProps) => {
           <span>{starsCost}</span>
         </div>
       )}
+      <ChatBadge chat={chat} isMuted={isMuted} />
     </div>
   );
 };
