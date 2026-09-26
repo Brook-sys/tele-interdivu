@@ -126,3 +126,15 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     og apontando para web.telegram.org, cosmético para uso pessoal). Se quiser
     metadados corretos, passar `BASE_URL=https://seu-dominio/` como build-arg —
     nunca um path relativo.
+29. **Pipeline verde e imagem publicada** (acompanhado até o fim): job de testes
+    (tsc + 118 vitest) + job docker passam a cada push em `main`; imagem em
+    `ghcr.io/brook-sys/tele-interdivu` (tags `latest` e `sha-<commit>`), build
+    ~5min com cache GHA. Histórico de debugging do pipeline: `npm ci` → lock
+    dessincronizado (item 27); alpine/musl → `node:24-slim` (glibc);
+    `BASE_URL=/` → removido (item 28).
+30. **O pacote GHCR nasce privado** (comportamento padrão do GitHub para
+    packages de Actions). Como a imagem é credential-free, torná-la pública na
+    UI do pacote é seguro e dispensa `docker login` no homelab. Alternativa:
+    manter privada e logar com um PAT que tenha `read:packages`
+    (`docker login ghcr.io -u Brook-sys`). O token `gh` local NÃO tem
+    `read:packages` (por isso a API de pacotes não lista via CLI).
