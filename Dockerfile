@@ -23,12 +23,12 @@ COPY . .
 
 ARG TELEGRAM_API_ID
 ARG TELEGRAM_API_HASH
-ARG BASE_URL=/
 # These can be dummies — the container-level TELEGRAM_API_ID/TELEGRAM_API_HASH
 # environment variables override them at runtime (see deploy/docker-entrypoint.d)
+# NOTE: do NOT pass a `BASE_URL` build arg — the upstream build expects either a
+# full URL (defaults to web.telegram.org metadata) or unset; a bare "/" breaks it
 ENV TELEGRAM_API_ID=$TELEGRAM_API_ID
 ENV TELEGRAM_API_HASH=$TELEGRAM_API_HASH
-ENV BASE_URL=$BASE_URL
 
 RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build:production
 

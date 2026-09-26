@@ -120,3 +120,9 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     `package.json` — o próprio upstream instala com `npm i`; descoberto no CI).
     CI e Dockerfile usam `npm install`. Se quiser `npm ci`, regenere o lock e
     aceite o churn no rebase.
+28. **`BASE_URL` de build quebra o build se não for URL completa** (`EISDIR` no
+    `vite:build-html` com `/`; reproduzido localmente). Removido de
+    Dockerfile/compose — o build usa o default do upstream (metadados canonical/
+    og apontando para web.telegram.org, cosmético para uso pessoal). Se quiser
+    metadados corretos, passar `BASE_URL=https://seu-dominio/` como build-arg —
+    nunca um path relativo.

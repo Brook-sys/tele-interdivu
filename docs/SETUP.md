@@ -12,7 +12,6 @@
 # 1. Arquivo .env na raiz (NÃO commitar):
 #    TELEGRAM_API_ID=123456
 #    TELEGRAM_API_HASH=abcdef...
-#    BASE_URL=https://SEU_DOMINIO/   (usado para links/manifest)
 
 # 2. Instalar dependências — IMPORTANTE: o npm 11 (que acompanha o Node 24)
 #    quebra neste repo (bug com dependência git `emoji-data-ios`: conflito
