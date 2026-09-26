@@ -1,5 +1,29 @@
 # Setup — build, run e deploy
 
+## ⚠️ Requisito absoluto: contexto seguro (HTTPS ou localhost)
+
+O Telegram Web A **não funciona via `http://IP-DA-REDE:8090`** — não é bug, é
+política dos navegadores: fora de um *secure context* (HTTPS, `localhost` ou
+`127.0.0.1`), o browser desliga `crypto.subtle` e `navigator.locks`. Sintomas
+exatos (reproduzidos): tela "Your browser is not supported" (o `compatTest`
+reporta `WebCrypto false` e `WebLocks false`, todo o resto `true`) e, se
+bypassar com "I'm Feeling Lucky", o QR de login fica em loading infinito
+(worker em loop: `Cannot read properties of undefined (reading 'digest')`).
+
+Como acessar corretamente:
+
+- **Tailscale (mais rápido se você já usa)**: no host com Tailscale,
+  `tailscale serve --bg --https=443 http://localhost:8090` → acesse
+  `https://<host>.<tailnet>.ts.net` (cert Let's Encrypt automático; habilite
+  HTTPS/certs no admin do tailnet; o celular precisa do app Tailscale ativo).
+- **Reverse proxy com domínio próprio** (Caddy/NPM/Traefik + Let's Encrypt)
+  apontando para a porta 8090 — o caminho clássico do homelab.
+- **Teste rápido sem nada disso** (do PC): `ssh -L 8090:localhost:8090 homelab`
+  e acesse `http://localhost:8090` — localhost É contexto seguro.
+
+Confirmação rápida no seu ambiente: DevTools → Console → `window.isSecureContext`.
+`false` = é isso que está quebrando o acesso.
+
 ## Requisitos
 
 - Node `^24.11` e npm `^11` (conforme `package.json` engines)

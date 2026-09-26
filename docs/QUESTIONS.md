@@ -53,9 +53,17 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     A F4 futura (envio automatizado) carrega risco real de restrição da conta —
     mitigação já prevista no desenho (respeitar slowmode, esperar mensagens de
     terceiros), mas o risco não é zero.
-12. **PWA exige HTTPS** no homelab (service worker). Assumido reverse proxy com
-    certificado válido já existente (Caddy/Traefik/NPM). Sem isso, o app funciona,
-    mas perde install/PWA no celular.
+12. **HTTPS não é opcional — é requisito funcional.** Acessar via `http://IP-DA-REDE:8090`
+    desliga `crypto.subtle` e `navigator.locks` (contexto não-seguro, política do
+    navegador): o `compatTest` falha com a tela "Your browser is not supported"
+    (mesmo em navegador moderno) e, após o "I'm Feeling Lucky", o login fica em
+    loop infinito porque o GramJS não consegue fazer o handshake MTProto
+    (`TypeError: Cannot read properties of undefined (reading 'digest')` no
+    worker — `crypto.subtle` ausente). Reproduzido e confirmado. Servir atrás de
+    HTTPS válido (ou acessar via `localhost`/SSH tunnel) resolve os dois
+    sintomas. **Correção de uma análise anterior desta doc** que dizia que o app
+    "funcionaria sem HTTPS, perdendo só o PWA" — falso: sem contexto seguro o
+    app não funciona de forma alguma.
 
 ## Descobertas da implementação (validadas em código)
 
