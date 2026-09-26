@@ -37,7 +37,9 @@ FROM nginx:alpine
 
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
-COPY deploy/docker-entrypoint.d/ /docker-entrypoint.d/
+# `--chmod=755` is required: the official nginx entrypoint silently IGNORES
+# non-executable scripts in /docker-entrypoint.d (it does not source them)
+COPY --chmod=755 deploy/docker-entrypoint.d/ /docker-entrypoint.d/
 
 # Injected at container start by the entrypoint script (the image itself stays
 # credential-free; build-time values are dummies when not provided)
