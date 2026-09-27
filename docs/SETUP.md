@@ -82,17 +82,20 @@ worker (GramJS/MTProto).
 # 1. Login no GHCR (uma vez por host) — PAT com escopo read:packages
 docker login ghcr.io -u Brook-sys
 
-# 2. Credenciais no .env ao lado do docker-compose.yml:
+# 2. Configurações no .env ao lado do docker-compose.yml:
 #    TELEGRAM_API_ID=123456
 #    TELEGRAM_API_HASH=abcdef...
+#    PROXY_URL=socks5://usuario:senha@ip:porta   # Opcional (SOCKS5 ou HTTP CONNECT)
 
 docker compose pull && docker compose up -d
 ```
 
 A imagem é publicada por CI em todo push para `main`:
-`ghcr.io/brook-sys/tele-interdivu` (tags `latest` e `sha`). Para acompanhar:
-`gh run watch` ou a aba Actions do repo. Como a imagem não contém segredos,
-torná-la pública no GHCR é seguro (pacotes criados por Actions nascem privados).
+`ghcr.io/brook-sys/tele-interdivu` (tags `latest` e `sha`).
+
+- **Volume persistente `/data`**: armazena o banco SQLite nativo da automação (`automation.db`), campanhas, logs e a sessão do robô para sobreviver a reboots e upgrades.
+- **Suporte a Proxy (SOCKS5 / HTTP CONNECT)**: quando `PROXY_URL` está definido, **100% do tráfego MTProto** (tanto do navegador quanto da automação 24/7) é roteado pelo proxy com política **Fail-Closed** (se o proxy falhar, a conexão é recusada para evitar vazamento do seu IP residencial).
+- **Handoff exclusivo**: quando a automação inicia, o navegador cede a conexão e exibe o dashboard de telemetria; quando você pausa, o navegador retoma o chat normal sem precisar de login duplo nem novo QR code.
 
 ## Deploy via build local (alternativa)
 

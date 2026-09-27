@@ -31,22 +31,31 @@ ENV TELEGRAM_API_ID=$TELEGRAM_API_ID
 ENV TELEGRAM_API_HASH=$TELEGRAM_API_HASH
 
 RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build:production
+RUN npm run build:server
 
-# Stage 2 — serve static files
-FROM nginx:alpine
+# Stage 2 — runtime with Node 24 and Nginx
+FROM node:24-slim AS runner
+
+RUN apt-get update && apt-get install -y --no-install-recommends nginx ca-certificates wget \
+  && rm -rf /var/lib/apt/lists/* \
+  && rm -f /etc/nginx/sites-enabled/default
 
 COPY --from=builder /app/dist /usr/share/nginx/html
+COPY --from=builder /app/dist-server /app/server
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
-# `--chmod=755` is required: the official nginx entrypoint silently IGNORES
-# non-executable scripts in /docker-entrypoint.d (it does not source them)
-COPY --chmod=755 deploy/docker-entrypoint.d/ /docker-entrypoint.d/
+COPY --chmod=755 deploy/entrypoint.sh /entrypoint.sh
 
-# Injected at container start by the entrypoint script (the image itself stays
-# credential-free; build-time values are dummies when not provided)
+# Injected at container start by entrypoint.sh (the image itself stays credential-free)
 ENV TELEGRAM_API_ID=""
 ENV TELEGRAM_API_HASH=""
+ENV PROXY_URL=""
+ENV AUTOMATION_PORT="3000"
+
+VOLUME ["/data"]
 
 EXPOSE 80
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD wget -qO- http://localhost/ >/dev/null 2>&1 || exit 1
+
+ENTRYPOINT ["/entrypoint.sh"]

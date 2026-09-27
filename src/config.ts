@@ -6,17 +6,21 @@ import type {
   ResaleGiftsFilterOptions,
 } from './types';
 
+const metaEnv = typeof import.meta !== 'undefined' ? import.meta.env : undefined;
+const globalProcess = typeof globalThis !== 'undefined' ? (globalThis as any).process : undefined;
+const processEnv = globalProcess?.env;
+
 export const APP_CODE_NAME = 'A';
-export const APP_ENV = import.meta.env.TG_APP_ENV;
-export const APP_NAME = import.meta.env.TG_APP_NAME || `Telegram Web ${APP_CODE_NAME}`;
+export const APP_ENV = metaEnv?.TG_APP_ENV || processEnv?.TG_APP_ENV;
+export const APP_NAME = metaEnv?.TG_APP_NAME || processEnv?.TG_APP_NAME || `Telegram Web ${APP_CODE_NAME}`;
 
 export const PRODUCTION_HOSTNAME = 'web.telegram.org';
 export const PRODUCTION_URL = 'https://web.telegram.org/a';
 export const WEB_VERSION_BASE = 'https://web.telegram.org/'; // Used to redirect to other versions
-export const BASE_URL = import.meta.env.TG_PUBLIC_URL;
+export const BASE_URL = metaEnv?.TG_PUBLIC_URL || processEnv?.TG_PUBLIC_URL;
 export const ACCOUNT_QUERY = 'account';
 
-export const IS_MOCKED_CLIENT = import.meta.env.TG_APP_MOCKED_CLIENT === '1';
+export const IS_MOCKED_CLIENT = (metaEnv?.TG_APP_MOCKED_CLIENT || processEnv?.TG_APP_MOCKED_CLIENT) === '1';
 export const IS_TEST = APP_ENV === 'test';
 export const IS_PERF = APP_ENV === 'perf';
 export const IS_BETA = APP_ENV === 'staging';
@@ -35,7 +39,7 @@ export const BETA_CHANGELOG_URL = 'https://telegra.ph/WebA-Beta-03-20';
 export const DEBUG_ALERT_MSG = 'Shoot!\nSomething went wrong, please see the error details in Dev Tools Console.';
 export const DEBUG_GRAMJS = false;
 
-export const PAGE_TITLE = import.meta.env.TG_APP_TITLE;
+export const PAGE_TITLE = metaEnv?.TG_APP_TITLE || processEnv?.TG_APP_TITLE;
 export const PAGE_TITLE_TAURI = 'Telegram Air';
 export const INACTIVE_MARKER = '[Inactive]';
 
@@ -45,6 +49,7 @@ declare global {
     __TELEGRAM_CREDS__?: {
       id?: number | string;
       hash?: string;
+      isProxyEnabled?: boolean;
     };
   }
 }
@@ -53,9 +58,13 @@ declare global {
 // passed to them through `ApiInitialArgs` instead
 const runtimeCredentials = typeof window !== 'undefined' ? window.__TELEGRAM_CREDS__ : undefined;
 
-export const TELEGRAM_API_ID = Number(runtimeCredentials?.id ?? import.meta.env.TG_TELEGRAM_API_ID);
-export const TELEGRAM_API_HASH = runtimeCredentials?.hash ?? import.meta.env.TG_TELEGRAM_API_HASH;
-export const TEST_SESSION = import.meta.env.TG_TEST_SESSION;
+const envApiId = metaEnv?.TG_TELEGRAM_API_ID || processEnv?.TELEGRAM_API_ID || processEnv?.TG_TELEGRAM_API_ID;
+const envApiHash = metaEnv?.TG_TELEGRAM_API_HASH || processEnv?.TELEGRAM_API_HASH || processEnv?.TG_TELEGRAM_API_HASH;
+
+export const TELEGRAM_API_ID = Number(runtimeCredentials?.id ?? envApiId);
+export const TELEGRAM_API_HASH = runtimeCredentials?.hash ?? envApiHash;
+export const IS_PROXY_ENABLED = Boolean(runtimeCredentials?.isProxyEnabled || processEnv?.PROXY_URL);
+export const TEST_SESSION = metaEnv?.TG_TEST_SESSION || processEnv?.TG_TEST_SESSION;
 
 export const DEBUG_PAYMENT_SMART_GLOCAL = false;
 

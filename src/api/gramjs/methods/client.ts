@@ -7,6 +7,7 @@ import {
 import type { TwoFaParams } from '../../../lib/gramjs/client/2fa';
 import TelegramClient from '../../../lib/gramjs/client/TelegramClient';
 import { RPCError } from '../../../lib/gramjs/errors';
+import { setProxyRelayOrigin } from '../../../lib/gramjs/extensions/PromisedWebSockets';
 import { Logger as GramJsLogger } from '../../../lib/gramjs/extensions/index';
 
 import type { ThreadId } from '../../../types';
@@ -96,7 +97,12 @@ export async function init(initialArgs: ApiInitialArgs, onConnected?: NoneToVoid
     mockScenario, shouldForceHttpTransport, shouldAllowHttpTransport,
     shouldDebugExportedSenders, langCode, isTestServerRequested, accountIds,
     hasPasskeySupport, apiId = TELEGRAM_API_ID, apiHash = TELEGRAM_API_HASH,
+    proxyRelayOrigin,
   } = initialArgs;
+
+  if (proxyRelayOrigin) {
+    setProxyRelayOrigin(proxyRelayOrigin);
+  }
 
   const session = new sessions.CallbackSession(sessionData, onSessionUpdate);
 

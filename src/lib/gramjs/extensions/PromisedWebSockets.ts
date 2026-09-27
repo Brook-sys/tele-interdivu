@@ -6,6 +6,16 @@ const closeError = new Error('WebSocket was closed');
 const CONNECTION_TIMEOUT = 3000;
 const MAX_TIMEOUT = 30000;
 
+let proxyRelayOrigin: string | undefined;
+
+export function setProxyRelayOrigin(origin: string | undefined) {
+  proxyRelayOrigin = origin;
+}
+
+export function getProxyRelayOrigin() {
+  return proxyRelayOrigin;
+}
+
 export default class PromisedWebSockets {
   private readonly mutex = new Mutex();
 
@@ -79,6 +89,19 @@ export default class PromisedWebSockets {
   }
 
   getWebSocketLink(ip: string, port: number, isTestServer?: boolean, isPremium?: boolean) {
+    if (proxyRelayOrigin) {
+      const isHttps = proxyRelayOrigin.startsWith('https:');
+      const wsProto = isHttps ? 'wss:' : 'ws:';
+      const cleanHost = proxyRelayOrigin.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      const query = new URLSearchParams({
+        ip,
+        port: String(port),
+        ...(isTestServer && { test: '1' }),
+        ...(isPremium && { premium: '1' }),
+      });
+      return `${wsProto}//${cleanHost}/apiws_proxy?${query.toString()}`;
+    }
+
     if (port === 443) {
       return `wss://${ip}:${port}/apiws${isTestServer ? '_test' : ''}${isPremium ? '_premium' : ''}`;
     } else {

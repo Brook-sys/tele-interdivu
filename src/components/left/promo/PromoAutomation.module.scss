@@ -1,0 +1,369 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.scrollable {
+  overflow-y: auto;
+  flex: 1;
+  padding: 0.75rem 1rem 1.5rem;
+}
+
+.errorBox {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+
+  font-size: 0.8125rem;
+  color: var(--color-danger);
+
+  background: var(--color-error);
+}
+
+.successBox {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+
+  font-size: 0.8125rem;
+  color: var(--color-green);
+
+  background: var(--color-background-secondary);
+}
+
+.statusBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  margin-bottom: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+
+  background: var(--color-background-secondary);
+}
+
+.statusBadge {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.statusDot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+}
+
+.badgeRunning,
+.logSuccess {
+  color: var(--color-green);
+
+  .statusDot {
+    background: var(--color-green);
+    box-shadow: 0 0 0.5rem var(--color-green);
+  }
+}
+
+.badgeStopped {
+  color: var(--color-text-secondary);
+
+  .statusDot {
+    background: var(--color-text-secondary);
+  }
+}
+
+.badgeSleep {
+  color: var(--color-primary);
+
+  .statusDot {
+    background: var(--color-primary);
+  }
+}
+
+.badgeMicroPause,
+.logFlood {
+  color: var(--color-orange);
+
+  .statusDot {
+    background: var(--color-orange);
+  }
+}
+
+.badgeCircuit,
+.logError {
+  color: var(--color-danger);
+
+  .statusDot {
+    background: var(--color-danger);
+  }
+}
+
+.controls,
+.twoCols {
+  display: flex;
+  gap: 0.5rem;
+
+  > * {
+    flex: 1;
+  }
+}
+
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.statCard {
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--color-background-secondary);
+}
+
+.statValue {
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.statLabel,
+.queueSub {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.tabsHeader {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--color-dividers);
+}
+
+.tabBtn {
+  cursor: pointer;
+
+  padding: 0.5rem 0.625rem;
+  border: none;
+
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+
+  background: none;
+
+  &:hover {
+    color: var(--color-text);
+  }
+}
+
+.tabBtnActive {
+  border-bottom: 2px solid var(--color-primary);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-primary);
+}
+
+.tabContent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.fieldGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.fieldLabel {
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.textarea {
+  resize: vertical;
+
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-dividers);
+  border-radius: 0.5rem;
+
+  font-family: inherit;
+  font-size: 0.875rem;
+  color: var(--color-text);
+
+  background: var(--color-background);
+
+  &:focus {
+    border-color: var(--color-primary);
+    outline: none;
+  }
+}
+
+.checkboxRow {
+  display: flex;
+  align-items: center;
+}
+
+.checkboxLabel {
+  cursor: pointer;
+
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  font-size: 0.875rem;
+}
+
+.radioGroup {
+  display: flex;
+  gap: 1rem;
+}
+
+.radioLabel {
+  cursor: pointer;
+
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+
+  font-size: 0.8125rem;
+}
+
+.btnRow {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
+.previewsContainer {
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--color-background-secondary);
+}
+
+.previewsHeader {
+  margin-bottom: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.previewBox {
+  margin-bottom: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.375rem;
+
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+
+  background: var(--color-background);
+}
+
+.queueRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+
+  background: var(--color-background-secondary);
+}
+
+.queueMain {
+  display: flex;
+  flex-direction: column;
+}
+
+.queueTitle {
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
+}
+
+.queueBadge {
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.75rem;
+  font-size: 0.75rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.queueReady {
+  color: var(--color-green);
+  background: var(--color-background-own);
+}
+
+.queueSlow {
+  color: var(--color-orange);
+  background: var(--color-background-own);
+}
+
+.queueWait {
+  color: var(--color-primary);
+  background: var(--color-background-own);
+}
+
+.queueBlocked {
+  color: var(--color-danger);
+  background: var(--color-error);
+}
+
+.logRow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+
+  background: var(--color-background-secondary);
+}
+
+.logTop {
+  display: flex;
+  justify-content: space-between;
+}
+
+.logTitle {
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-medium);
+}
+
+.logStatus {
+  font-size: 0.75rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.logSnippet {
+  overflow: hidden;
+
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logDetails {
+  font-size: 0.6875rem;
+  color: var(--color-danger);
+}
+
+.loadingWrap {
+  display: flex;
+  justify-content: center;
+  padding: 2rem 0;
+}
+
+.emptyText {
+  padding: 1.5rem 0;
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  text-align: center;
+}

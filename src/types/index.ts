@@ -310,6 +310,7 @@ export enum LeftColumnContent {
   NewGroupStep2,
   PromoPanel,
   PromoManage,
+  PromoAutomation,
 }
 
 export enum GlobalSearchContent {

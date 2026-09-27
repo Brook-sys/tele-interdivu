@@ -14,5 +14,12 @@ services:
     environment:
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:?Set TELEGRAM_API_ID in .env}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?Set TELEGRAM_API_HASH in .env}
+      # Dedicated proxy for multi-account isolation (supports socks5:// or http://)
+      PROXY_URL: ${PROXY_URL:-}
+    volumes:
+      - tele-data:/data
     ports:
       - "8090:80"
+
+volumes:
+  tele-data:

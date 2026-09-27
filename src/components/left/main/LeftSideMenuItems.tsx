@@ -47,6 +47,7 @@ type OwnProps = {
   onSelectArchived: NoneToVoidFunction;
   onSelectPromoPanel: NoneToVoidFunction;
   onSelectPromoManage: NoneToVoidFunction;
+  onSelectPromoAutomation: NoneToVoidFunction;
   onBotMenuOpened: NoneToVoidFunction;
   onBotMenuClosed: NoneToVoidFunction;
   footer?: string;
@@ -75,6 +76,7 @@ const LeftSideMenuItems = ({
   onSelectSettings,
   onSelectPromoPanel,
   onSelectPromoManage,
+  onSelectPromoAutomation,
   onBotMenuOpened,
   onBotMenuClosed,
   footer,
@@ -199,6 +201,12 @@ const LeftSideMenuItems = ({
         onClick={onSelectPromoManage}
       >
         {lang('PromoMenuManage')}
+      </MenuItem>
+      <MenuItem
+        icon="bots"
+        onClick={onSelectPromoAutomation}
+      >
+        {lang('PromoAutomationTitle')}
       </MenuItem>
       <MenuSeparator />
       {bots.map((bot) => (

@@ -2,6 +2,7 @@ import type { ActionReturnType } from '../../types';
 import { ManagementProgress } from '../../../types';
 
 import {
+  IS_PROXY_ENABLED,
   LANG_CACHE_NAME,
   LOCK_SCREEN_ANIMATION_DURATION_MS,
   MEDIA_CACHE_NAME,
@@ -87,6 +88,7 @@ addActionHandler('initApi', (global, actions): ActionReturnType => {
     hasPasskeySupport: IS_WEBAUTHN_SUPPORTED,
     apiId: TELEGRAM_API_ID,
     apiHash: TELEGRAM_API_HASH,
+    proxyRelayOrigin: IS_PROXY_ENABLED ? window.location.origin : undefined,
   });
 
   void setShouldEnableDebugLog(Boolean(shouldCollectDebugLogs));

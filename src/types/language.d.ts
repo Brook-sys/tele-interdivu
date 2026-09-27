@@ -2326,6 +2326,36 @@ export interface LangPair {
   'PromoManageNoMatches': undefined;
   'PromoManageNoFolder': undefined;
   'PromoManageDone': undefined;
+  'PromoAutomationTitle': undefined;
+  'PromoAutomationStart': undefined;
+  'PromoAutomationStop': undefined;
+  'PromoAutomationRunning': undefined;
+  'PromoAutomationStopped': undefined;
+  'PromoAutomationSleepWindow': undefined;
+  'PromoAutomationMicroPause': undefined;
+  'PromoAutomationCircuitBreaker': undefined;
+  'PromoAutomationSpintaxLabel': undefined;
+  'PromoAutomationLinksLabel': undefined;
+  'PromoAutomationTestSpintax': undefined;
+  'PromoAutomationLinkPreview': undefined;
+  'PromoAutomationModeManual': undefined;
+  'PromoAutomationModeContinuous': undefined;
+  'PromoAutomationMinDelay': undefined;
+  'PromoAutomationMaxDelay': undefined;
+  'PromoAutomationRoundInterval': undefined;
+  'PromoAutomationMinOtherMessages': undefined;
+  'PromoAutomationSleepWindowToggle': undefined;
+  'PromoAutomationSleepStart': undefined;
+  'PromoAutomationSleepEnd': undefined;
+  'PromoAutomationDailyLimit': undefined;
+  'PromoAutomationSave': undefined;
+  'PromoAutomationSaved': undefined;
+  'PromoAutomationLiveQueue': undefined;
+  'PromoAutomationLogs': undefined;
+  'PromoAutomationCampaignTab': undefined;
+  'PromoAutomationSettingsTab': undefined;
+  'PromoAutomationQueueTab': undefined;
+  'PromoAutomationLogsTab': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {

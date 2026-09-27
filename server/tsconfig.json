@@ -1,0 +1,16 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "types": [
+      "node",
+      "dom-chromium-ai",
+      "dom-view-transitions",
+      "vite/client"
+    ],
+    "tsBuildInfoFile": "../.cache/.tsconfig.server.tsbuildinfo"
+  },
+  "include": [
+    "../src/@types",
+    "."
+  ]
+}

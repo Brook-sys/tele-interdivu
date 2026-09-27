@@ -129,6 +129,10 @@ const PromoPanel = ({
     openLeftColumnContent({ contentKey: LeftColumnContent.PromoManage });
   });
 
+  const handleOpenAutomation = useLastCallback(() => {
+    openLeftColumnContent({ contentKey: LeftColumnContent.PromoAutomation });
+  });
+
   if (isSettingsOpen || isSetupMode) {
     return (
       <PromoPanelSettings
@@ -151,6 +155,14 @@ const PromoPanel = ({
         />
         <h3>{lang('PromoPanelTitle')}</h3>
         <div className={styles.headerButtons}>
+          <Button
+            round
+            size="smaller"
+            color="translucent"
+            ariaLabel={lang('PromoAutomationTitle')}
+            iconName="bots"
+            onClick={handleOpenAutomation}
+          />
           <Button
             round
             size="smaller"

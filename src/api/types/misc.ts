@@ -35,6 +35,7 @@ export interface ApiInitialArgs {
   // Runtime credentials override, forwarded to the worker (falls back to build-time)
   apiId?: number;
   apiHash?: string;
+  proxyRelayOrigin?: string;
 }
 
 export type ApiPasskeyOption = {

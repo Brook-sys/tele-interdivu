@@ -1,4 +1,6 @@
 dist/build-stats.json
+dist-server/
+data/
 node_modules
 .cache
 .env
