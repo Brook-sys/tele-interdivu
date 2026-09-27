@@ -3,6 +3,7 @@ import {
   memo,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
@@ -34,7 +35,9 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Button from '../../ui/Button';
+import Checkbox from '../../ui/Checkbox';
 import InputText from '../../ui/InputText';
+import Radio from '../../ui/Radio';
 import Spinner from '../../ui/Spinner';
 
 import styles from './PromoAutomation.module.scss';
@@ -73,6 +76,10 @@ const PromoAutomation = ({
   const [actionError, setActionError] = useState<string | undefined>();
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | undefined>();
 
+  // Guard to initialize form inputs from the server only on first load,
+  // preventing periodic status polling from overwriting user edits.
+  const isFormInitializedRef = useRef(false);
+
   // Campaign form state
   const [spintaxTemplate, setSpintaxTemplate] = useState('');
   const [linksText, setLinksText] = useState('');
@@ -81,14 +88,14 @@ const PromoAutomation = ({
 
   // Settings form state
   const [mode, setMode] = useState<'manual' | 'continuous'>('manual');
-  const [minDelay, setMinDelay] = useState(60);
-  const [maxDelay, setMaxDelay] = useState(180);
-  const [roundInterval, setRoundInterval] = useState(120);
-  const [minOtherMsgs, setMinOtherMsgs] = useState(5);
+  const [minDelay, setMinDelay] = useState('60');
+  const [maxDelay, setMaxDelay] = useState('180');
+  const [roundInterval, setRoundInterval] = useState('120');
+  const [minOtherMsgs, setMinOtherMsgs] = useState('5');
   const [sleepEnabled, setSleepEnabled] = useState(true);
   const [sleepStart, setSleepStart] = useState('23:30');
   const [sleepEnd, setSleepEnd] = useState('07:30');
-  const [dailyLimit, setDailyLimit] = useState(80);
+  const [dailyLimit, setDailyLimit] = useState('80');
 
   useHistoryBack({
     isActive,
@@ -98,27 +105,31 @@ const PromoAutomation = ({
   const folder = settings.folderId !== undefined ? foldersById[settings.folderId] : undefined;
   const targetChatIds = useMemo(() => folder?.includedChatIds || [], [folder]);
 
-  const loadAll = useLastCallback(async () => {
+  const loadStatusAndData = useLastCallback(async () => {
     try {
       const res = await fetchAutomationStatus();
       setStatusData(res);
 
-      if (res.campaign) {
-        setSpintaxTemplate((prev) => (prev ? prev : res.campaign.spintaxTemplate || ''));
-        setLinksText((prev) => (prev ? prev : (res.campaign.links || []).join('\n')));
-      }
+      if (!isFormInitializedRef.current) {
+        isFormInitializedRef.current = true;
 
-      if (res.config) {
-        setMode(res.config.mode);
-        setMinDelay(res.config.minDelaySeconds);
-        setMaxDelay(res.config.maxDelaySeconds);
-        setRoundInterval(res.config.roundIntervalMinutes);
-        setMinOtherMsgs(res.config.minOtherMessages);
-        setSleepEnabled(res.config.sleepWindowEnabled);
-        setSleepStart(res.config.sleepWindowStart);
-        setSleepEnd(res.config.sleepWindowEnd);
-        setDailyLimit(res.config.dailyLimit);
-        setLinkPreview(res.config.linkPreviewEnabled);
+        if (res.campaign) {
+          setSpintaxTemplate(res.campaign.spintaxTemplate || '');
+          setLinksText((res.campaign.links || []).join('\n'));
+        }
+
+        if (res.config) {
+          setMode(res.config.mode || 'manual');
+          setMinDelay(String(res.config.minDelaySeconds ?? 60));
+          setMaxDelay(String(res.config.maxDelaySeconds ?? 180));
+          setRoundInterval(String(res.config.roundIntervalMinutes ?? 120));
+          setMinOtherMsgs(String(res.config.minOtherMessages ?? 5));
+          setSleepEnabled(Boolean(res.config.sleepWindowEnabled));
+          setSleepStart(res.config.sleepWindowStart || '23:30');
+          setSleepEnd(res.config.sleepWindowEnd || '07:30');
+          setDailyLimit(String(res.config.dailyLimit ?? 80));
+          setLinkPreview(Boolean(res.config.linkPreviewEnabled));
+        }
       }
 
       if (activeTab === 'queue') {
@@ -138,13 +149,13 @@ const PromoAutomation = ({
   useEffect(() => {
     if (!isActive) return undefined;
 
-    loadAll();
-    const interval = window.setInterval(loadAll, STATUS_REFRESH_INTERVAL_MS);
+    loadStatusAndData();
+    const interval = window.setInterval(loadStatusAndData, STATUS_REFRESH_INTERVAL_MS);
 
     return () => {
       window.clearInterval(interval);
     };
-  }, [isActive, activeTab, loadAll]);
+  }, [isActive, activeTab, loadStatusAndData]);
 
   const handleStart = useLastCallback(async () => {
     setActionError(undefined);
@@ -178,7 +189,7 @@ const PromoAutomation = ({
         targetChats,
       });
 
-      await loadAll();
+      await loadStatusAndData();
     } catch (err: any) {
       setActionError(err.message);
     } finally {
@@ -197,7 +208,7 @@ const PromoAutomation = ({
       // 2. Reconnect browser client
       initApi();
 
-      await loadAll();
+      await loadStatusAndData();
     } catch (err: any) {
       setActionError(err.message);
     } finally {
@@ -242,14 +253,15 @@ const PromoAutomation = ({
     try {
       await saveAutomationConfig({
         mode,
-        minDelaySeconds: minDelay,
-        maxDelaySeconds: maxDelay,
-        roundIntervalMinutes: roundInterval,
-        minOtherMessages: minOtherMsgs,
+        minDelaySeconds: Number(minDelay) || 60,
+        maxDelaySeconds: Number(maxDelay) || 180,
+        roundIntervalMinutes: Number(roundInterval) || 120,
+        minOtherMessages: Number(minOtherMsgs) || 1,
         sleepWindowEnabled: sleepEnabled,
         sleepWindowStart: sleepStart,
         sleepWindowEnd: sleepEnd,
-        dailyLimit,
+        dailyLimit: Number(dailyLimit) || 80,
+        linkPreviewEnabled: linkPreview,
       });
       setSaveSuccessMsg(lang('PromoAutomationSaved'));
       setTimeout(() => setSaveSuccessMsg(undefined), 3000);
@@ -322,7 +334,7 @@ const PromoAutomation = ({
         <div className={styles.statCard}>
           <div className={styles.statValue}>
             {stats.todaySent}
-            /
+            {' / '}
             {stats.dailyLimit}
           </div>
           <div className={styles.statLabel}>Enviados Hoje</div>
@@ -404,14 +416,11 @@ const PromoAutomation = ({
         </div>
 
         <div className={styles.checkboxRow}>
-          <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={linkPreview}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setLinkPreview(e.target.checked)}
-            />
-            <span>{lang('PromoAutomationLinkPreview')}</span>
-          </label>
+          <Checkbox
+            checked={linkPreview}
+            onCheck={setLinkPreview}
+            label={lang('PromoAutomationLinkPreview')}
+          />
         </div>
 
         <div className={styles.btnRow}>
@@ -441,71 +450,67 @@ const PromoAutomation = ({
         <div className={styles.fieldGroup}>
           <label className={styles.fieldLabel}>Modo de Execução</label>
           <div className={styles.radioGroup}>
-            <label className={styles.radioLabel}>
-              <input
-                type="radio"
-                name="mode"
-                value="manual"
-                checked={mode === 'manual'}
-                onChange={() => setMode('manual')}
-              />
-              <span>{lang('PromoAutomationModeManual')}</span>
-            </label>
-            <label className={styles.radioLabel}>
-              <input
-                type="radio"
-                name="mode"
-                value="continuous"
-                checked={mode === 'continuous'}
-                onChange={() => setMode('continuous')}
-              />
-              <span>{lang('PromoAutomationModeContinuous')}</span>
-            </label>
+            <Radio
+              name="mode"
+              value="manual"
+              checked={mode === 'manual'}
+              label={lang('PromoAutomationModeManual')}
+              onChange={() => setMode('manual')}
+            />
+            <Radio
+              name="mode"
+              value="continuous"
+              checked={mode === 'continuous'}
+              label={lang('PromoAutomationModeContinuous')}
+              onChange={() => setMode('continuous')}
+            />
           </div>
         </div>
 
         <div className={styles.twoCols}>
           <InputText
             label={lang('PromoAutomationMinDelay')}
-            value={String(minDelay)}
-            onChange={(e) => setMinDelay(Number(e.target.value) || 30)}
+            value={minDelay}
+            inputMode="numeric"
+            onChange={(e) => setMinDelay(e.target.value)}
           />
           <InputText
             label={lang('PromoAutomationMaxDelay')}
-            value={String(maxDelay)}
-            onChange={(e) => setMaxDelay(Number(e.target.value) || 120)}
+            value={maxDelay}
+            inputMode="numeric"
+            onChange={(e) => setMaxDelay(e.target.value)}
           />
         </div>
 
         {mode === 'continuous' && (
           <InputText
             label={lang('PromoAutomationRoundInterval')}
-            value={String(roundInterval)}
-            onChange={(e) => setRoundInterval(Number(e.target.value) || 60)}
+            value={roundInterval}
+            inputMode="numeric"
+            onChange={(e) => setRoundInterval(e.target.value)}
           />
         )}
 
         <InputText
           label={lang('PromoAutomationMinOtherMessages')}
-          value={String(minOtherMsgs)}
-          onChange={(e) => setMinOtherMsgs(Number(e.target.value) || 1)}
+          value={minOtherMsgs}
+          inputMode="numeric"
+          onChange={(e) => setMinOtherMsgs(e.target.value)}
         />
 
         <InputText
           label={lang('PromoAutomationDailyLimit')}
-          value={String(dailyLimit)}
-          onChange={(e) => setDailyLimit(Number(e.target.value) || 50)}
+          value={dailyLimit}
+          inputMode="numeric"
+          onChange={(e) => setDailyLimit(e.target.value)}
         />
 
         <div className={styles.checkboxRow}>
-          <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={sleepEnabled}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setSleepEnabled(e.target.checked)}
-            />
-            <span>{lang('PromoAutomationSleepWindowToggle')}</span>
-          </label>
+          <Checkbox
+            checked={sleepEnabled}
+            onCheck={setSleepEnabled}
+            label={lang('PromoAutomationSleepWindowToggle')}
+          />
         </div>
 
         {sleepEnabled && (
@@ -546,7 +551,7 @@ const PromoAutomation = ({
                   Msgs de terceiros:
                   {' '}
                   {g.otherMessagesCount}
-                  /
+                  {' / '}
                   {minOtherMsgs}
                 </span>
               </div>
