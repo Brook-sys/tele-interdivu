@@ -16,7 +16,7 @@ describe('Automation REST API routes', () => {
   beforeAll(async () => {
     db = new AutomationDatabase(':memory:');
     runner = new TelegramRunner(db);
-    scheduler = new AutomationScheduler(db, async () => ({ success: true }));
+    scheduler = new AutomationScheduler(db, () => Promise.resolve({ success: true }));
 
     const handler = createApiHandler(db, runner, scheduler);
     server = http.createServer(async (req, res) => {
@@ -35,7 +35,7 @@ describe('Automation REST API routes', () => {
     });
   });
 
-  afterAll(async () => {
+  afterAll(() => {
     db.close();
     server.close();
   });

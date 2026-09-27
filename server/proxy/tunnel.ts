@@ -167,7 +167,6 @@ function connectSocks5(
 
       if (stage === 'auth') {
         if (buffer.length < 2) return;
-        const ver = buffer[0];
         const status = buffer[1];
         buffer = buffer.subarray(2);
 
@@ -182,7 +181,6 @@ function connectSocks5(
 
       if (stage === 'connect') {
         if (buffer.length < 4) return;
-        const ver = buffer[0];
         const rep = buffer[1];
         const atyp = buffer[3];
 
@@ -265,8 +263,10 @@ function connectHttpConnect(
   return new Promise((resolve, reject) => {
     const proxyPort = Number(proxyUrl.port) || 8080;
     const proxyHost = proxyUrl.hostname;
+    const decodedUser = proxyUrl.username ? decodeURIComponent(proxyUrl.username) : '';
+    const decodedPass = proxyUrl.password ? decodeURIComponent(proxyUrl.password) : '';
     const auth = proxyUrl.username
-      ? `Basic ${Buffer.from(`${decodeURIComponent(proxyUrl.username)}:${decodeURIComponent(proxyUrl.password || '')}`).toString('base64')}`
+      ? `Basic ${Buffer.from(`${decodedUser}:${decodedPass}`).toString('base64')}`
       : undefined;
 
     const socket = net.connect({ host: proxyHost, port: proxyPort });

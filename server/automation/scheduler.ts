@@ -80,6 +80,14 @@ export function evaluateGroupEligibility(
   return { isEligible: true, reason: 'READY' };
 }
 
+interface SendResult {
+  success: boolean;
+  floodWaitSeconds?: number;
+  error?: string;
+}
+
+type SendCallback = (chatId: string, text: string, linkUsed: string) => Promise<SendResult>;
+
 export class AutomationScheduler {
   private state: SchedulerState = {
     status: 'STOPPED',
@@ -94,7 +102,7 @@ export class AutomationScheduler {
 
   constructor(
     private readonly db: AutomationDatabase,
-    private readonly sendCallback: (chatId: string, text: string, linkUsed: string) => Promise<{ success: boolean; floodWaitSeconds?: number; error?: string }>,
+    private readonly sendCallback: SendCallback,
   ) {}
 
   getState(): Readonly<SchedulerState> {

@@ -116,7 +116,7 @@ export class TelegramRunner {
     this.isConnected = true;
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
     this.isConnected = false;
     if (this.client) {
       try {
@@ -126,6 +126,7 @@ export class TelegramRunner {
       }
       this.client = undefined;
     }
+    return Promise.resolve();
   }
 
   private handleUpdate(update: any) {

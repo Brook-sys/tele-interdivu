@@ -180,14 +180,16 @@ const PromoAutomation = ({
         throw new Error('Nenhum grupo na pasta de divulgação selecionada.');
       }
 
-      // 1. Disconnect browser client so the daemon takes over exclusively
-      await callApi('disconnect');
-
-      // 2. Handover session to backend
+      // 1. Handover session to backend — the browser is disconnected only after
+      // the daemon confirms the takeover, so a backend failure never leaves the
+      // UI without an active Telegram connection
       await startAutomationTakeover({
         sessionData,
         targetChats,
       });
+
+      // 2. Disconnect browser client so the daemon owns the session exclusively
+      await callApi('disconnect');
 
       await loadStatusAndData();
     } catch (err: any) {

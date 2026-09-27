@@ -18,14 +18,14 @@ export function handleWsRelay(
   const isPremium = parsedUrl.searchParams.get('premium') === '1';
 
   if (!ip || !portStr) {
-    clientSocket.write('HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nMissing ip or port parameter\r\n');
+    clientSocket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nMissing ip or port parameter\r\n');
     clientSocket.destroy();
     return;
   }
 
   const port = Number(portStr);
   if (!port || port <= 0 || port > 65535) {
-    clientSocket.write('HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nInvalid port parameter\r\n');
+    clientSocket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid port parameter\r\n');
     clientSocket.destroy();
     return;
   }
@@ -82,9 +82,13 @@ export function handleWsRelay(
     targetSocket.pipe(clientSocket);
   }).catch((err: Error) => {
     // eslint-disable-next-line no-console
-    console.error(`[WS Relay FAIL-CLOSED] Failed to connect to ${ip}:${port} (proxy: ${proxyUrl || 'none'}):`, err.message);
-    const msg = `HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nProxy Relay Error: ${err.message}\r\n`;
-    clientSocket.write(msg);
+    console.error(
+      `[WS Relay FAIL-CLOSED] Failed to connect to ${ip}:${port}`
+      + ` (proxy: ${proxyUrl || 'none'}):`,
+      err.message,
+    );
+    const body = `Proxy Relay Error: ${err.message}`;
+    clientSocket.write(`HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n${body}\r\n`);
     clientSocket.destroy();
   });
 }

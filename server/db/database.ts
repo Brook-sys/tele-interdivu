@@ -1,3 +1,6 @@
+// node:sqlite requires literal null to bind SQL NULL values
+/* eslint-disable no-null/no-null */
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -218,9 +221,10 @@ export class AutomationDatabase {
       };
     }
 
-    let links: string[] = [];
+    let links: string[];
     try {
-      links = JSON.parse(row.links_json);
+      const parsed = JSON.parse(row.links_json);
+      links = Array.isArray(parsed) ? parsed : [];
     } catch {
       links = [];
     }

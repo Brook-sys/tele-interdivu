@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { AutomationDatabase } from '../db/database';
 import {
   calculateJitterDelayMs,
   evaluateGroupEligibility,

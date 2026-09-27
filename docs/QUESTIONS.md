@@ -146,3 +146,55 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     manter privada e logar com um PAT que tenha `read:packages`
     (`docker login ghcr.io -u Brook-sys`). O token `gh` local NÃO tem
     `read:packages` (por isso a API de pacotes não lista via CLI).
+
+## Cadeia de falhas do primeiro takeover (toda ela resolvida)
+
+31. **`self is not defined` no takeover** — GramJS chama `self.crypto.subtle` e
+    `self.addEventListener('offline')` (globais de browser/worker). O backend
+    Node.js (não browser) não possui `self`. Fix: `server/polyfills.ts`
+    importado como primeiro módulo de `server/index.ts` — `globalThis.self =
+    globalThis` + `addEventListener` no-op. Validação: session handshake
+    acontece agora (completou `Connection to zws4... TCPObfuscated complete`).
+
+32. **Interop CJS/ESM do `@cryptography/aes`** — esbuild com `--platform=node`
+    priorizava `main` (CJS) → `import_aes.default is not a constructor` ao
+    criar a conexão TCPObfuscated. Fix: `--main-fields=module,main` no
+    `build:server` (o pacote exporta ES real em `dist/es`).
+
+33. **Ordem do handoff estava errada** — o frontend chamava `callApi('disconnect')`
+    ANTES do takeover, deixando a interface desconectada se o takeover falhasse
+    (o refresh da página era o "retorno"). Fix: sequência inversa — o backend
+    confirma o takeover PRIMEIRO e o navegador só então desconecta. Em caso de
+    erro o navegador jamais perde conexão, e o erro aparece na tela ao invés de
+    derrubar o chat.
+
+34. **Mensagem de erro 500 sem contexto** — a rota de takeover retornava apenas
+    `Internal server error: ${message}`. Fix: a API agora registra o stack
+    completo no log do daemon (`[Automation API] METHOD path failed: stack`) e
+    a mensagem passa a conter a rota (`Internal server error (takeover): ...`).
+
+35. **nginx ignorava script do entrypoint** — esqueci o bit de execução;
+    `docker-entrypoint.sh` "Ignoring 99-runtime-config.sh, not executable".
+    Fix confirmado no boot: `COPY --chmod=755` no Dockerfile + `entrypoint.sh`
+    definitivo (nginx oficial agora executa o script).
+
+## Postmortem de UI da automação (corrigido junto com esse ciclo)
+
+36. **Campos de formulários resetando sozinhos a cada 3s** — o loop de telemetria
+    (`loadStatusAndData` com `setInterval` 3000ms) hidratava TODOS os inputs a
+    cada re-fetch, sobrescrevendo edições do usuário. Fix: `isFormInitializedRef`
+    (hidrata os formulários apenas na primeira carga); os re-fetches subsequentes
+    só atualizam telemetria (status/grupos/logs).
+
+37. **Inputs numéricos travando ao digitar** — campos minDelay etc. usavam
+    `value={Number(...)}` + `Number(e.target.value) || fallback`, o que quebrava
+    na tecla Backspace (valor vazio → fallback instantâneo). Fix: estado como
+    string, conversão numérica apenas no salvar.
+
+38. **`input type="checkbox"/radio` nativos não estilizavam** — migrados para os
+    componentes oficiais `ui/Checkbox` e `ui/Radio` do Telegram Web A (fasterDOM
+    / Teact não renderiza visual de checkbox nativo corretamente).
+
+39. **`linkPreview` não persistia ao salvar Ritmo** — a flag estava separada
+    entre campaign e config; fix: ambos os botões de salvar agora persistem
+    `linkPreviewEnabled` juntos (nunca divergem).

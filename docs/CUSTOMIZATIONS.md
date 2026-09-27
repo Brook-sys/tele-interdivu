@@ -37,6 +37,7 @@ Observações de rebase: o `package-lock.json` NÃO deve ser alterado (instalaç
 ```
 server/                                         Daemon backend Node.js 24 + REST API + MTProto Relay
   ├── index.ts                                  Entrypoint HTTP (porta 3000) e WebSocket relay (/apiws_proxy)
+  ├── polyfills.ts                              Shims node: `globalThis.self` e `addEventListener` no-op
   ├── api/                                      Rotas REST (/status, /takeover, /release, /campaign, /config, etc.)
   ├── automation/                               Scheduler anti-ban, Spintax compiler, TelegramRunner
   ├── db/                                       Banco SQLite nativo (node:sqlite) em /data/automation.db

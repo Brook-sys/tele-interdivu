@@ -187,7 +187,9 @@ export function createApiHandler(
       sendError(res, 404, `Route /api/v1/automation/${route} not found`);
       return true;
     } catch (err: any) {
-      sendError(res, 500, `Internal server error: ${err.message}`);
+      // eslint-disable-next-line no-console
+      console.error(`[Automation API] ${method} ${pathname} failed:`, err.stack || err.message);
+      sendError(res, 500, `Internal server error (${route}): ${err.message}`);
       return true;
     }
   };

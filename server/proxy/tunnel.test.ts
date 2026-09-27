@@ -96,7 +96,7 @@ describe('createProxiedConnection', () => {
     });
   });
 
-  afterAll(async () => {
+  afterAll(() => {
     echoServer.close();
     httpProxyServer.close();
     socks5Server.close();

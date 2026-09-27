@@ -1,3 +1,5 @@
+import './polyfills';
+
 import http from 'node:http';
 
 import { createApiHandler } from './api/routes';
