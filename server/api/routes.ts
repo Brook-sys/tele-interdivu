@@ -80,6 +80,7 @@ export function createApiHandler(
         const isRunning = schedulerState.status === 'RUNNING'
           || schedulerState.status === 'WAITING_NEXT_ROUND'
           || schedulerState.status === 'WAITING_COOLDOWN'
+          || schedulerState.status === 'WAITING_MESSAGES'
           || schedulerState.status === 'MICRO_PAUSE'
           || schedulerState.status === 'SLEEP_WINDOW'
           || schedulerState.status === 'CIRCUIT_BREAKER';

@@ -10,7 +10,8 @@ export type SchedulerStatus =
   | 'CIRCUIT_BREAKER'
   | 'MICRO_PAUSE'
   | 'WAITING_NEXT_ROUND'
-  | 'WAITING_COOLDOWN';
+  | 'WAITING_COOLDOWN'
+  | 'WAITING_MESSAGES';
 
 export interface SchedulerState {
   status: SchedulerStatus;
@@ -67,7 +68,6 @@ export function evaluateGroupEligibility(
   group: GroupStateRecord,
   minOtherMessages: number,
   serverNow: number,
-  messageTimeoutHours = 4,
 ): { isEligible: boolean; reason: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' | 'STARS' } {
   if (group.status === 'BLOCKED') {
     return { isEligible: false, reason: 'BLOCKED' };
@@ -77,25 +77,21 @@ export function evaluateGroupEligibility(
     return { isEligible: false, reason: 'STARS' };
   }
 
-  // Check slowmode next send date
+  // 1. Check slowmode next send date
   if (group.slowmodeNextSendDate && group.slowmodeNextSendDate > serverNow) {
     return { isEligible: false, reason: 'WAITING_SLOWMODE' };
   }
 
-  // Check last sent time + slowmode window
+  // 2. Check last sent time + slowmode window
   if (group.lastSentAt && group.slowmodeSeconds > 0) {
     if (group.lastSentAt + group.slowmodeSeconds > serverNow) {
       return { isEligible: false, reason: 'WAITING_SLOWMODE' };
     }
   }
 
-  // Strict N other messages requirement applies once we have sent to this group previously.
-  // Inactivity timeout: if more than `messageTimeoutHours` elapsed since last send, release the requirement.
+  // 3. Strict N other messages requirement:
+  // Must have received at least minOtherMessages from other users before sending again!
   if (group.lastSentAt && group.otherMessagesCount < minOtherMessages) {
-    const elapsedSeconds = serverNow - group.lastSentAt;
-    if (messageTimeoutHours > 0 && elapsedSeconds >= messageTimeoutHours * 3600) {
-      return { isEligible: true, reason: 'READY' };
-    }
     return { isEligible: false, reason: 'WAITING_MESSAGES' };
   }
 
@@ -273,64 +269,53 @@ export class AutomationScheduler {
           }
         }
 
-        // 4. Find eligible group in current round (excluding blocked chats and chats that charge stars)
+        // 4. Find all valid groups (excluding blocked chats and chats that charge stars)
         const allGroups = this.db.getAllGroupStates();
-        const remainingInRound = allGroups.filter((g) => (
-          !this.sentInRound.has(g.chatId)
-          && g.status !== 'BLOCKED'
+        const validGroups = allGroups.filter((g) => (
+          g.status !== 'BLOCKED'
           && g.status !== 'STARS'
           && (g.starsCost || 0) === 0
         ));
 
-        if (remainingInRound.length === 0 && allGroups.length > 0) {
-          // All groups in this round were processed!
-          if (config.mode === 'manual') {
-            this.state.status = 'STOPPED';
-            const snippet = `Rodada manual #${this.state.activeRound} concluída `
-              + `(${this.sentInRound.size} grupos enviados).`;
-            this.db.addLog({
-              createdAt: serverNow,
-              chatId: 'system',
-              chatTitle: 'Sistema de Automação',
-              messageSnippet: snippet,
-              linkUsed: '',
-              status: 'SUCCESS',
-            });
-            break;
-          } else {
-            this.state.status = 'WAITING_NEXT_ROUND';
-            const snippet = `Rodada #${this.state.activeRound} concluída (${this.sentInRound.size} enviados). `
-              + `Próxima rodada em ${config.roundIntervalMinutes} minutos.`;
-            this.db.addLog({
-              createdAt: serverNow,
-              chatId: 'system',
-              chatTitle: 'Sistema de Automação',
-              messageSnippet: snippet,
-              linkUsed: '',
-              status: 'SUCCESS',
-            });
-            const pauseMs = Math.max(1, config.roundIntervalMinutes) * 60 * 1000;
-            await this.sleep(pauseMs, signal);
-            this.sentInRound.clear();
-            this.state.sentInRoundCount = 0;
-            this.state.activeRound++;
-            this.state.status = 'RUNNING';
-            continue;
-          }
+        if (validGroups.length === 0) {
+          this.state.lastRunError = 'Nenhum grupo válido configurado na pasta';
+          this.state.status = 'STOPPED';
+          break;
         }
 
-        // Look for the next ready group among remainingInRound
-        let eligibleGroup: GroupStateRecord | undefined;
+        // In manual mode, we send each group once per manual run
+        const candidateGroups = config.mode === 'manual'
+          ? validGroups.filter((g) => !this.sentInRound.has(g.chatId))
+          : validGroups;
+
+        if (config.mode === 'manual' && candidateGroups.length === 0) {
+          // Manual round completed!
+          this.state.status = 'STOPPED';
+          const snippet = `Rodada manual #${this.state.activeRound} concluída `
+            + `(${this.sentInRound.size} grupos enviados).`;
+          this.db.addLog({
+            createdAt: serverNow,
+            chatId: 'system',
+            chatTitle: 'Sistema de Automação',
+            messageSnippet: snippet,
+            linkUsed: '',
+            status: 'SUCCESS',
+          });
+          break;
+        }
+
+        // Evaluate eligibility for all candidate groups
+        const readyGroups: GroupStateRecord[] = [];
         let minSlowmodeWaitSeconds = Infinity;
         let slowestGroupTitle = '';
         let countWaitingSlowmode = 0;
+        let countWaitingMessages = 0;
 
-        for (const g of remainingInRound) {
+        for (const g of candidateGroups) {
           let evalResult = evaluateGroupEligibility(
             g,
             config.minOtherMessages,
             serverNow,
-            config.minOtherMessagesTimeoutHours,
           );
 
           if (evalResult.reason === 'WAITING_SLOWMODE') {
@@ -342,31 +327,41 @@ export class AutomationScheduler {
               slowestGroupTitle = g.title;
             }
           } else if (evalResult.reason === 'WAITING_MESSAGES') {
-            // Check Telegram history only if needed (debounced inside runner)
+            countWaitingMessages++;
+            // Check Telegram history only if needed (debounced with 5m cache inside runner)
             if (this.checkMessagesCallback) {
               const verifiedCount = await this.checkMessagesCallback(g.chatId, config.minOtherMessages);
               if (verifiedCount >= config.minOtherMessages) {
                 evalResult = { isEligible: true, reason: 'READY' };
+                countWaitingMessages--;
               }
             }
           }
 
           if (evalResult.isEligible) {
-            eligibleGroup = g;
-            break;
+            readyGroups.push(g);
           }
         }
 
-        if (!eligibleGroup) {
-          // No groups are immediately ready in remainingInRound!
-          const maxAcceptableSlowmodeWait = Math.min(300, config.roundIntervalMinutes * 60);
+        let eligibleGroup: GroupStateRecord | undefined;
 
-          if (countWaitingSlowmode > 0 && minSlowmodeWaitSeconds <= maxAcceptableSlowmodeWait) {
-            // Group slowmode will expire shortly - wait for it with clear status!
+        if (readyGroups.length > 0) {
+          // Prioritize groups that have gone the longest without a message from us
+          readyGroups.sort((a, b) => {
+            const timeA = a.lastSentAt || 0;
+            const timeB = b.lastSentAt || 0;
+            return timeA - timeB;
+          });
+          eligibleGroup = readyGroups[0];
+        }
+
+        if (!eligibleGroup) {
+          // No groups currently satisfy all criteria
+          if (countWaitingSlowmode > 0) {
             this.state.status = 'WAITING_COOLDOWN';
             this.state.currentChatTitle = slowestGroupTitle;
             this.state.waitingReason = `Aguardando cooldown de ${slowestGroupTitle}`;
-            const waitMs = Math.max(5, minSlowmodeWaitSeconds) * 1000;
+            const waitMs = Math.min(Math.max(5, minSlowmodeWaitSeconds), 30) * 1000;
             await this.sleep(waitMs, signal);
             this.state.currentChatTitle = undefined;
             this.state.waitingReason = undefined;
@@ -374,42 +369,17 @@ export class AutomationScheduler {
             continue;
           }
 
-          // If no groups can be sent soon (remaining are blocked by slowmode or waiting messages):
-          // Conclude the current round and let the next round re-evaluate all groups!
-          if (config.mode === 'manual') {
-            this.state.status = 'STOPPED';
-            const snippet = `Rodada manual #${this.state.activeRound} finalizada. `
-              + `${this.sentInRound.size} grupos enviados; ${remainingInRound.length} aguardando mensagens/cooldown.`;
-            this.db.addLog({
-              createdAt: serverNow,
-              chatId: 'system',
-              chatTitle: 'Sistema de Automação',
-              messageSnippet: snippet,
-              linkUsed: '',
-              status: 'SUCCESS',
-            });
-            break;
-          } else {
-            this.state.status = 'WAITING_NEXT_ROUND';
-            const snippet = `Rodada #${this.state.activeRound} concluída `
-              + `(${this.sentInRound.size} grupos enviados, ${remainingInRound.length} adiados para a próxima rodada). `
-              + `Próxima rodada em ${config.roundIntervalMinutes} min.`;
-            this.db.addLog({
-              createdAt: serverNow,
-              chatId: 'system',
-              chatTitle: 'Sistema de Automação',
-              messageSnippet: snippet,
-              linkUsed: '',
-              status: 'SUCCESS',
-            });
-            const pauseMs = Math.max(1, config.roundIntervalMinutes) * 60 * 1000;
-            await this.sleep(pauseMs, signal);
-            this.sentInRound.clear();
-            this.state.sentInRoundCount = 0;
-            this.state.activeRound++;
+          if (countWaitingMessages > 0) {
+            this.state.status = 'WAITING_MESSAGES';
+            this.state.waitingReason = `Aguardando novas mensagens nos grupos (mínimo: ${config.minOtherMessages})`;
+            await this.sleep(15_000, signal);
+            this.state.waitingReason = undefined;
             this.state.status = 'RUNNING';
             continue;
           }
+
+          await this.sleep(15_000, signal);
+          continue;
         }
 
         // 5. Compile and send message

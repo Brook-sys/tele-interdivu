@@ -79,23 +79,39 @@ describe('evaluateGroupEligibility', () => {
       starsCost: 0,
       status: 'READY',
       updatedAt: now,
-    }, 5, now, 4);
+    }, 5, now);
 
     expect(result.isEligible).toBe(false);
     expect(result.reason).toBe('WAITING_MESSAGES');
   });
 
-  it('releases group waiting for messages if inactive for longer than messageTimeoutHours', () => {
+  it('strictly blocks group waiting for messages regardless of how long ago it was sent', () => {
     const result = evaluateGroupEligibility({
       chatId: '-1',
       title: 'Grupo A',
-      lastSentAt: now - (5 * 3600), // 5 hours ago (> 4h timeout)
-      otherMessagesCount: 1, // less than 5, but quiet for 5h
+      lastSentAt: now - (24 * 3600), // 24 hours ago
+      otherMessagesCount: 4, // less than 5 (strict: requires 5)
       slowmodeSeconds: 60,
       starsCost: 0,
       status: 'READY',
       updatedAt: now,
-    }, 5, now, 4);
+    }, 5, now);
+
+    expect(result.isEligible).toBe(false);
+    expect(result.reason).toBe('WAITING_MESSAGES');
+  });
+
+  it('allows re-sending to previously sent group when both slowmode and other messages are met', () => {
+    const result = evaluateGroupEligibility({
+      chatId: '-1',
+      title: 'Grupo A',
+      lastSentAt: now - 600, // 10 minutes ago
+      otherMessagesCount: 15, // more than 5!
+      slowmodeSeconds: 60, // slowmode was 60s, 600s elapsed
+      starsCost: 0,
+      status: 'READY',
+      updatedAt: now,
+    }, 5, now);
 
     expect(result.isEligible).toBe(true);
     expect(result.reason).toBe('READY');

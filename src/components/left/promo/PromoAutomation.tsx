@@ -105,7 +105,6 @@ const PromoAutomation = ({
   const [maxDelay, setMaxDelay] = useState('180');
   const [roundInterval, setRoundInterval] = useState('120');
   const [minOtherMsgs, setMinOtherMsgs] = useState('5');
-  const [minOtherMsgsTimeoutHours, setMinOtherMsgsTimeoutHours] = useState('4');
   const [sleepEnabled, setSleepEnabled] = useState(true);
   const [sleepStart, setSleepStart] = useState('23:30');
   const [sleepEnd, setSleepEnd] = useState('07:30');
@@ -148,7 +147,6 @@ const PromoAutomation = ({
           setMaxDelay(String(res.config.maxDelaySeconds ?? 180));
           setRoundInterval(String(res.config.roundIntervalMinutes ?? 120));
           setMinOtherMsgs(String(res.config.minOtherMessages ?? 5));
-          setMinOtherMsgsTimeoutHours(String(res.config.minOtherMessagesTimeoutHours ?? 4));
           setSleepEnabled(Boolean(res.config.sleepWindowEnabled));
           setSleepStart(res.config.sleepWindowStart || '23:30');
           setSleepEnd(res.config.sleepWindowEnd || '07:30');
@@ -351,7 +349,6 @@ const PromoAutomation = ({
         maxDelaySeconds: Number(maxDelay) || 180,
         roundIntervalMinutes: Number(roundInterval) || 120,
         minOtherMessages: Number(minOtherMsgs) || 1,
-        minOtherMessagesTimeoutHours: Number(minOtherMsgsTimeoutHours) || 4,
         sleepWindowEnabled: sleepEnabled,
         sleepWindowStart: sleepStart,
         sleepWindowEnd: sleepEnd,
@@ -398,6 +395,9 @@ const PromoAutomation = ({
       label = statusData?.waitingReason
         ? `${statusData.waitingReason} (${formatCountdownSeconds(sleepRemaining)})`
         : `Aguardando Cooldown (${formatCountdownSeconds(sleepRemaining)})`;
+    } else if (status === 'WAITING_MESSAGES') {
+      badgeClass = styles.badgeSleep;
+      label = statusData?.waitingReason || 'Aguardando mensagens de terceiros';
     } else if (status === 'WAITING_NEXT_ROUND') {
       badgeClass = styles.badgeSleep;
       label = `Pausa entre Rodadas (${formatCountdownSeconds(sleepRemaining)})`;
@@ -420,7 +420,12 @@ const PromoAutomation = ({
         </div>
         <div className={styles.controls}>
           {isRunning
-            && (status === 'MICRO_PAUSE' || status === 'WAITING_NEXT_ROUND' || status === 'WAITING_COOLDOWN') && (
+            && (
+              status === 'MICRO_PAUSE'
+              || status === 'WAITING_NEXT_ROUND'
+              || status === 'WAITING_COOLDOWN'
+              || status === 'WAITING_MESSAGES'
+            ) && (
             <Button
               color="translucent"
               size="smaller"
@@ -640,13 +645,6 @@ const PromoAutomation = ({
           value={minOtherMsgs}
           inputMode="numeric"
           onChange={(e) => setMinOtherMsgs(e.target.value)}
-        />
-
-        <InputText
-          label="Tempo limite para esperar msgs (horas - padrão 4h)"
-          value={minOtherMsgsTimeoutHours}
-          inputMode="numeric"
-          onChange={(e) => setMinOtherMsgsTimeoutHours(e.target.value)}
         />
 
         <InputText

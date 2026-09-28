@@ -6,7 +6,8 @@ export type AutomationStatusType =
   | 'CIRCUIT_BREAKER'
   | 'MICRO_PAUSE'
   | 'WAITING_NEXT_ROUND'
-  | 'WAITING_COOLDOWN';
+  | 'WAITING_COOLDOWN'
+  | 'WAITING_MESSAGES';
 
 export interface AutomationStatusResponse {
   isRunning: boolean;
@@ -36,7 +37,6 @@ export interface AutomationStatusResponse {
     maxDelaySeconds: number;
     roundIntervalMinutes: number;
     minOtherMessages: number;
-    minOtherMessagesTimeoutHours?: number;
     sleepWindowEnabled: boolean;
     sleepWindowStart: string;
     sleepWindowEnd: string;
