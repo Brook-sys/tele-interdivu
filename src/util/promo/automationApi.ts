@@ -44,7 +44,8 @@ export interface AutomationGroupState {
   otherMessagesCount: number;
   slowmodeSeconds: number;
   slowmodeNextSendDate?: number;
-  status: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' | 'SENT';
+  starsCost?: number;
+  status: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' | 'STARS' | 'SENT';
   lastError?: string;
   updatedAt: number;
 }
@@ -96,6 +97,8 @@ export function startAutomationTakeover(payload: {
     slowmodeSeconds?: number;
     slowmodeNextSendDate?: number;
     lastSentAt?: number;
+    starsCost?: number;
+    status?: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' | 'STARS' | 'SENT';
   }[];
 }): Promise<{ success: boolean; message: string }> {
   return request<{ success: boolean; message: string }>('takeover', {

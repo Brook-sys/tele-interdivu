@@ -228,7 +228,13 @@ export class TelegramRunner {
   async sendMessage(
     chatId: string,
     text: string,
-  ): Promise<{ success: boolean; floodWaitSeconds?: number; error?: string }> {
+  ): Promise<{
+    success: boolean;
+    isPaymentRequired?: boolean;
+    slowmodeSeconds?: number;
+    floodWaitSeconds?: number;
+    error?: string;
+  }> {
     if (!this.client || !this.client.isConnected()) {
       return { success: false, error: 'Telegram runner is not connected' };
     }
@@ -268,21 +274,36 @@ export class TelegramRunner {
     } catch (err: any) {
       const message = String(err?.message || err);
 
+      if (/ALLOW_PAYMENT_REQUIRED/.test(message)) {
+        const match = message.match(/ALLOW_PAYMENT_REQUIRED_(\d+)/);
+        const stars = match ? Number(match[1]) : 1;
+        this.db.setGroupStarsCost(chatId, stars);
+        return {
+          success: false,
+          isPaymentRequired: true,
+          error: `Exige pagamento de ${stars} estrelas`,
+        };
+      }
+
       if (err instanceof errors.SlowModeWaitError || /SLOWMODE_WAIT_(\d+)/.test(message)) {
         const match = message.match(/SLOWMODE_WAIT_(\d+)/);
         const seconds = match ? Number(match[1]) : (err.seconds || 60);
         const serverNow = Math.floor(Date.now() / 1000);
         this.db.setGroupSlowmode(chatId, seconds, serverNow + seconds);
-        return { success: false, floodWaitSeconds: seconds, error: `Slowmode wait: ${seconds}s` };
+        return {
+          success: false,
+          slowmodeSeconds: seconds,
+          error: `Slowmode ativo: aguardar ${seconds}s`,
+        };
       }
 
       if (err instanceof errors.FloodWaitError || /FLOOD_WAIT_(\d+)/.test(message)) {
         const match = message.match(/FLOOD_WAIT_(\d+)/);
         const seconds = match ? Number(match[1]) : (err.seconds || 60);
-        return { success: false, floodWaitSeconds: seconds, error: `Flood wait: ${seconds}s` };
+        return { success: false, floodWaitSeconds: seconds, error: `Flood wait da conta: ${seconds}s` };
       }
 
-      if (/CHAT_WRITE_FORBIDDEN|USER_BANNED_IN_CHANNEL|CHANNEL_PRIVATE/.test(message)) {
+      if (/CHAT_WRITE_FORBIDDEN|USER_BANNED_IN_CHANNEL|CHANNEL_PRIVATE|CHAT_RESTRICTED/.test(message)) {
         this.db.upsertGroupState({
           chatId,
           title: chatInfo.title,
@@ -290,6 +311,7 @@ export class TelegramRunner {
           lastError: message,
           otherMessagesCount: 0,
           slowmodeSeconds: 0,
+          starsCost: 0,
         });
         return { success: false, error: message };
       }

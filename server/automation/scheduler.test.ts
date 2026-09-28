@@ -44,6 +44,7 @@ describe('evaluateGroupEligibility', () => {
       lastSentAt: now - 3600,
       otherMessagesCount: 5,
       slowmodeSeconds: 60,
+      starsCost: 0,
       status: 'READY',
       updatedAt: now,
     }, 5, now);
@@ -59,6 +60,7 @@ describe('evaluateGroupEligibility', () => {
       lastSentAt: undefined, // never sent yet
       otherMessagesCount: 0,
       slowmodeSeconds: 60,
+      starsCost: 0,
       status: 'READY',
       updatedAt: now,
     }, 5, now);
@@ -74,6 +76,7 @@ describe('evaluateGroupEligibility', () => {
       lastSentAt: now - 3600,
       otherMessagesCount: 3, // less than 5
       slowmodeSeconds: 60,
+      starsCost: 0,
       status: 'READY',
       updatedAt: now,
     }, 5, now);
@@ -90,11 +93,55 @@ describe('evaluateGroupEligibility', () => {
       otherMessagesCount: 10,
       slowmodeSeconds: 600,
       slowmodeNextSendDate: now + 300,
+      starsCost: 0,
       status: 'READY',
       updatedAt: now,
     }, 5, now);
 
     expect(result.isEligible).toBe(false);
     expect(result.reason).toBe('WAITING_SLOWMODE');
+  });
+
+  it('strictly rejects groups that charge Stars', () => {
+    const withCost = evaluateGroupEligibility({
+      chatId: '-2',
+      title: 'Grupo Estrelas',
+      otherMessagesCount: 10,
+      slowmodeSeconds: 0,
+      starsCost: 20,
+      status: 'READY',
+      updatedAt: now,
+    }, 5, now);
+
+    expect(withCost.isEligible).toBe(false);
+    expect(withCost.reason).toBe('STARS');
+
+    const withStatus = evaluateGroupEligibility({
+      chatId: '-3',
+      title: 'Grupo Estrelas 2',
+      otherMessagesCount: 10,
+      slowmodeSeconds: 0,
+      starsCost: 0,
+      status: 'STARS',
+      updatedAt: now,
+    }, 5, now);
+
+    expect(withStatus.isEligible).toBe(false);
+    expect(withStatus.reason).toBe('STARS');
+  });
+
+  it('strictly rejects blocked groups', () => {
+    const result = evaluateGroupEligibility({
+      chatId: '-4',
+      title: 'Grupo Bloqueado',
+      otherMessagesCount: 10,
+      slowmodeSeconds: 0,
+      starsCost: 0,
+      status: 'BLOCKED',
+      updatedAt: now,
+    }, 5, now);
+
+    expect(result.isEligible).toBe(false);
+    expect(result.reason).toBe('BLOCKED');
   });
 });

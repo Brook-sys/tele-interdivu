@@ -31,7 +31,8 @@ export interface GroupStateRecord {
   otherMessagesCount: number;
   slowmodeSeconds: number;
   slowmodeNextSendDate?: number;
-  status: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' | 'SENT';
+  starsCost: number;
+  status: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' | 'STARS' | 'SENT';
   lastError?: string;
   updatedAt: number;
 }
@@ -117,6 +118,7 @@ export class AutomationDatabase {
         other_messages_count INTEGER NOT NULL DEFAULT 0,
         slowmode_seconds INTEGER NOT NULL DEFAULT 0,
         slowmode_next_send_date INTEGER,
+        stars_cost INTEGER NOT NULL DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'READY',
         last_error TEXT,
         updated_at INTEGER NOT NULL
@@ -135,6 +137,25 @@ export class AutomationDatabase {
 
       CREATE INDEX IF NOT EXISTS idx_logs_created_at ON logs(created_at);
     `);
+
+    // Migration for existing databases: ensure `stars_cost` column exists
+    try {
+      this.db.exec('ALTER TABLE group_state ADD COLUMN stars_cost INTEGER NOT NULL DEFAULT 0');
+    } catch {
+      // Column already exists
+    }
+
+    // Auto-quarantine any groups that previously failed with ALLOW_PAYMENT_REQUIRED
+    try {
+      this.db.exec(`
+        UPDATE group_state
+        SET status = 'STARS', stars_cost = 20
+        WHERE last_error LIKE '%ALLOW_PAYMENT_REQUIRED%'
+           OR last_error LIKE '%PAYMENT_REQUIRED%'
+      `);
+    } catch {
+      // ignore
+    }
 
     // Ensure initial config row exists
     const row = this.db.prepare('SELECT id FROM config WHERE id = 1').get();
@@ -279,14 +300,15 @@ export class AutomationDatabase {
     this.db.prepare(`
       INSERT INTO group_state (
         chat_id, title, last_sent_at, other_messages_count, slowmode_seconds,
-        slowmode_next_send_date, status, last_error, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        slowmode_next_send_date, stars_cost, status, last_error, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(chat_id) DO UPDATE SET
         title = excluded.title,
         last_sent_at = coalesce(excluded.last_sent_at, group_state.last_sent_at),
         other_messages_count = excluded.other_messages_count,
         slowmode_seconds = excluded.slowmode_seconds,
         slowmode_next_send_date = excluded.slowmode_next_send_date,
+        stars_cost = excluded.stars_cost,
         status = excluded.status,
         last_error = excluded.last_error,
         updated_at = excluded.updated_at
@@ -297,10 +319,31 @@ export class AutomationDatabase {
       record.otherMessagesCount,
       record.slowmodeSeconds,
       record.slowmodeNextSendDate ?? null,
+      record.starsCost || 0,
       record.status,
       record.lastError ?? null,
       now,
     );
+  }
+
+  setGroupStarsCost(chatId: string, starsCost: number) {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare(`
+      UPDATE group_state SET
+        stars_cost = ?,
+        status = 'STARS',
+        last_error = ?,
+        updated_at = ?
+      WHERE chat_id = ?
+    `).run(starsCost, `Exige pagamento de ${starsCost} estrelas`, now, chatId);
+  }
+
+  syncTargetGroups(validChatIds: string[]) {
+    if (!validChatIds.length) return;
+    const placeholders = validChatIds.map(() => '?').join(',');
+    this.db.prepare(`
+      DELETE FROM group_state WHERE chat_id NOT IN (${placeholders})
+    `).run(...validChatIds);
   }
 
   incrementGroupOtherMessages(chatId: string) {
@@ -329,6 +372,7 @@ export class AutomationDatabase {
       UPDATE group_state SET
         slowmode_seconds = ?,
         slowmode_next_send_date = ?,
+        status = 'WAITING_SLOWMODE',
         updated_at = ?
       WHERE chat_id = ?
     `).run(slowmodeSeconds, slowmodeNextSendDate ?? null, now, chatId);
@@ -355,6 +399,7 @@ export class AutomationDatabase {
       otherMessagesCount: Number(row.other_messages_count),
       slowmodeSeconds: Number(row.slowmode_seconds),
       slowmodeNextSendDate: row.slowmode_next_send_date ? Number(row.slowmode_next_send_date) : undefined,
+      starsCost: Number(row.stars_cost || 0),
       status: row.status,
       lastError: row.last_error ? String(row.last_error) : undefined,
       updatedAt: Number(row.updated_at),
@@ -371,6 +416,7 @@ export class AutomationDatabase {
       otherMessagesCount: Number(row.other_messages_count),
       slowmodeSeconds: Number(row.slowmode_seconds),
       slowmodeNextSendDate: row.slowmode_next_send_date ? Number(row.slowmode_next_send_date) : undefined,
+      starsCost: Number(row.stars_cost || 0),
       status: row.status,
       lastError: row.last_error ? String(row.last_error) : undefined,
       updatedAt: Number(row.updated_at),

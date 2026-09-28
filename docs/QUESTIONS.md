@@ -198,3 +198,27 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
 39. **`linkPreview` não persistia ao salvar Ritmo** — a flag estava separada
     entre campaign e config; fix: ambos os botões de salvar agora persistem
     `linkPreviewEnabled` juntos (nunca divergem).
+
+40. **Tentativa de disparo em grupos que cobram estrelas (`ALLOW_PAYMENT_REQUIRED_20`)**
+    — O frontend enviava a lista bruta da pasta para o backend sem filtrar
+    pelo classificador `classifyPromoChat`. Grupos cobrando estrelas entravam
+    como `READY` e falhavam com RPCError 403 `ALLOW_PAYMENT_REQUIRED`. Fix:
+    (1) `PromoAutomation.tsx` agora filtra estritamente grupos `stars` e
+    `blocked` antes do takeover; (2) `telegramRunner.ts` captura erros
+    `ALLOW_PAYMENT_REQUIRED`, marca o grupo no SQLite como `STARS` e o
+    scheduler nunca mais tenta enviar para ele; (3) migration automática no boot
+    para colocar em quarentena grupos que falharam com esse erro no passado.
+
+41. **Tentativa de disparo em grupos em slowmode cooldown / travamento de fila**
+    — Erros `SLOWMODE_WAIT_X` eram tratados como `floodWaitSeconds`, o que
+    colocava a automação inteira em pausa longa (ou acionava o Circuit Breaker)
+    por causa do cooldown de um único grupo. Fix: `telegramRunner.ts` agora
+    diferencia `slowmodeSeconds` de `floodWaitSeconds`; o grupo é atualizado no
+    SQLite com seu `slowmode_next_send_date` futuro, e a fila pula
+    imediatamente para o próximo grupo elegível sem pausar o motor.
+
+42. **Fila da automação mirava grupos não-livres** — Na inicialização da
+    automação, o backend agora sincroniza a lista de grupos ativos (`syncTargetGroups`),
+    removendo grupos que não estão mais na pasta ou que foram desqualificados.
+    Grupos em cooldown ativo entram como `WAITING_SLOWMODE` e só são
+    acionados quando o tempo expira e chegam as mensagens de terceiros.

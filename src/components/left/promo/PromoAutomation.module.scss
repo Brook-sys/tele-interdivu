@@ -86,7 +86,8 @@
 }
 
 .badgeMicroPause,
-.logFlood {
+.logFlood,
+.logSkipped {
   color: var(--color-orange);
 
   .statusDot {

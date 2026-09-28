@@ -26,6 +26,8 @@ import {
   stopAutomationRelease,
   testSpintaxPreviews,
 } from '../../../util/promo/automationApi';
+import { classifyPromoChat, getSlowmodeRemainingSeconds } from '../../../util/promo/classifyChat';
+import { getServerTime } from '../../../util/serverTime';
 import { loadStoredSession } from '../../../util/sessions';
 import { callApi } from '../../../api/gramjs';
 
@@ -171,22 +173,44 @@ const PromoAutomation = ({
         throw new Error('Sessão do Telegram não encontrada no navegador.');
       }
 
-      const targetChats = targetChatIds.map((id) => {
-        const chat = chatsById[id];
-        const fullInfo = fullInfoById[id];
-        const status = promoStatusById[id];
-        return {
-          id,
-          title: chat?.title || `Chat ${id}`,
-          accessHash: chat?.accessHash,
-          slowmodeSeconds: fullInfo?.slowMode?.seconds || 0,
-          slowmodeNextSendDate: fullInfo?.slowMode?.nextSendDate,
-          lastSentAt: status?.lastOwnMessageAt,
-        };
-      });
+      const serverNow = getServerTime();
+
+      const targetChats = targetChatIds
+        .map((id) => {
+          const chat = chatsById[id];
+          if (!chat) return undefined;
+
+          const fullInfo = fullInfoById[id];
+          const status = promoStatusById[id];
+          const classification = classifyPromoChat(chat, fullInfo, status, serverNow);
+
+          // Never target chats that are blocked or require Stars payment
+          if (classification === 'blocked' || classification === 'stars') {
+            return undefined;
+          }
+
+          const slowmodeRemaining = getSlowmodeRemainingSeconds(fullInfo, status, serverNow);
+          const slowmodeSeconds = fullInfo?.slowMode?.seconds || 0;
+          const slowmodeNextSendDate = slowmodeRemaining > 0 ? (serverNow + slowmodeRemaining) : undefined;
+
+          return {
+            id,
+            title: chat.title || `Chat ${id}`,
+            accessHash: chat.accessHash,
+            slowmodeSeconds,
+            slowmodeNextSendDate,
+            lastSentAt: status?.lastOwnMessageAt,
+            starsCost: chat.paidMessagesStars || 0,
+            status: slowmodeRemaining > 0 ? ('WAITING_SLOWMODE' as const) : ('READY' as const),
+          };
+        })
+        .filter((c): c is NonNullable<typeof c> => Boolean(c));
 
       if (!targetChats.length) {
-        throw new Error('Nenhum grupo na pasta de divulgação selecionada.');
+        throw new Error(
+          'Nenhum grupo livre para envio na pasta selecionada '
+          + '(grupos que cobram estrelas ou bloqueados são ignorados).',
+        );
       }
 
       // 1. Handover session to backend — the browser is disconnected only after
@@ -585,10 +609,11 @@ const PromoAutomation = ({
                 g.status === 'WAITING_SLOWMODE' && styles.queueSlow,
                 g.status === 'WAITING_MESSAGES' && styles.queueWait,
                 g.status === 'BLOCKED' && styles.queueBlocked,
+                g.status === 'STARS' && styles.queueBlocked,
                 g.status === 'SENT' && styles.queueReady,
               )}
               >
-                {g.status}
+                {g.status === 'STARS' ? 'COBRA ESTRELAS' : g.status}
               </span>
             </div>
           ))
@@ -610,6 +635,7 @@ const PromoAutomation = ({
                 <span className={buildClassName(
                   styles.logStatus,
                   log.status === 'SUCCESS' && styles.logSuccess,
+                  log.status === 'SKIPPED' && styles.logSkipped,
                   log.status === 'FLOOD_WAIT' && styles.logFlood,
                   log.status === 'ERROR' && styles.logError,
                 )}

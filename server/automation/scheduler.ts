@@ -56,9 +56,13 @@ export function evaluateGroupEligibility(
   group: GroupStateRecord,
   minOtherMessages: number,
   serverNow: number,
-): { isEligible: boolean; reason: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' } {
+): { isEligible: boolean; reason: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' | 'STARS' } {
   if (group.status === 'BLOCKED') {
     return { isEligible: false, reason: 'BLOCKED' };
+  }
+
+  if (group.status === 'STARS' || (group.starsCost || 0) > 0) {
+    return { isEligible: false, reason: 'STARS' };
   }
 
   // Check slowmode next send date
@@ -83,6 +87,8 @@ export function evaluateGroupEligibility(
 
 interface SendResult {
   success: boolean;
+  isPaymentRequired?: boolean;
+  slowmodeSeconds?: number;
   floodWaitSeconds?: number;
   error?: string;
 }
@@ -200,9 +206,14 @@ export class AutomationScheduler {
           continue;
         }
 
-        // 4. Find eligible group in current round
+        // 4. Find eligible group in current round (excluding blocked chats and chats that charge stars)
         const allGroups = this.db.getAllGroupStates();
-        const remainingInRound = allGroups.filter((g) => !this.sentInRound.has(g.chatId) && g.status !== 'BLOCKED');
+        const remainingInRound = allGroups.filter((g) => (
+          !this.sentInRound.has(g.chatId)
+          && g.status !== 'BLOCKED'
+          && g.status !== 'STARS'
+          && (g.starsCost || 0) === 0
+        ));
 
         if (remainingInRound.length === 0 && allGroups.length > 0) {
           // All groups in this round were processed!
@@ -304,6 +315,29 @@ export class AutomationScheduler {
             linkUsed,
             status: 'SUCCESS',
           });
+        } else if (sendResult.isPaymentRequired) {
+          // Group requires Stars payment - exclude from round and do NOT pause queue
+          this.sentInRound.add(eligibleGroup.chatId);
+          this.db.addLog({
+            createdAt: timestamp,
+            chatId: eligibleGroup.chatId,
+            chatTitle: eligibleGroup.title,
+            messageSnippet: messageText.slice(0, 100),
+            linkUsed,
+            status: 'SKIPPED',
+            details: sendResult.error || 'Grupo cobra estrelas (excluído da automação)',
+          });
+        } else if (sendResult.slowmodeSeconds) {
+          // Group is in slowmode cooldown - do NOT pause entire queue, just log and move to next group
+          this.db.addLog({
+            createdAt: timestamp,
+            chatId: eligibleGroup.chatId,
+            chatTitle: eligibleGroup.title,
+            messageSnippet: messageText.slice(0, 100),
+            linkUsed,
+            status: 'SKIPPED',
+            details: sendResult.error || `Em slowmode: aguardando ${sendResult.slowmodeSeconds}s`,
+          });
         } else if (sendResult.floodWaitSeconds) {
           this.state.consecutiveFloodWaits++;
           this.db.addLog({
@@ -327,6 +361,11 @@ export class AutomationScheduler {
             await this.sleep((sendResult.floodWaitSeconds + 30) * 1000, signal);
           }
         } else {
+          const isPermError = /CHAT_WRITE_FORBIDDEN|USER_BANNED_IN_CHANNEL|CHANNEL_PRIVATE|CHAT_RESTRICTED/
+            .test(sendResult.error || '');
+          if (isPermError) {
+            this.sentInRound.add(eligibleGroup.chatId);
+          }
           this.db.addLog({
             createdAt: timestamp,
             chatId: eligibleGroup.chatId,

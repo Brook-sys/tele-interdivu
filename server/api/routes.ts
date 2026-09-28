@@ -49,23 +49,32 @@ export function createApiHandler(
         let waitingSlowmodeCount = 0;
         let waitingMessagesCount = 0;
         let blockedCount = 0;
+        let starsCount = 0;
 
         for (const g of groups) {
           const evalResult = evaluateGroupEligibility(g, config.minOtherMessages, serverNow);
           if (evalResult.reason === 'READY') readyCount++;
           else if (evalResult.reason === 'WAITING_SLOWMODE') waitingSlowmodeCount++;
           else if (evalResult.reason === 'WAITING_MESSAGES') waitingMessagesCount++;
+          else if (evalResult.reason === 'STARS') starsCount++;
           else if (evalResult.reason === 'BLOCKED') blockedCount++;
         }
+
+        const validGroupsCount = groups.filter((g) => (
+          g.status !== 'BLOCKED'
+          && g.status !== 'STARS'
+          && (g.starsCost || 0) === 0
+        )).length;
 
         const stats = {
           todaySent,
           dailyLimit: config.dailyLimit,
-          totalGroups: groups.length,
+          totalGroups: validGroupsCount,
           readyCount,
           waitingSlowmodeCount,
           waitingMessagesCount,
           blockedCount,
+          starsCount,
         };
 
         const isRunning = schedulerState.status === 'RUNNING'
@@ -100,6 +109,8 @@ export function createApiHandler(
             slowmodeSeconds?: number;
             slowmodeNextSendDate?: number;
             lastSentAt?: number;
+            starsCost?: number;
+            status?: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' | 'STARS' | 'SENT';
           })[];
         }>(req);
 
@@ -111,7 +122,10 @@ export function createApiHandler(
         // Save session to SQLite for persistence
         db.saveSession(JSON.stringify(body.sessionData));
 
-        // Sync target groups in group_state
+        // Sync target groups in group_state — removes any old/deleted chats
+        const validChatIds = body.targetChats.map((c) => c.id);
+        db.syncTargetGroups(validChatIds);
+
         body.targetChats.forEach((chat) => {
           const existing = db.getGroupState(chat.id);
           const slowmodeSeconds = chat.slowmodeSeconds !== undefined
@@ -121,6 +135,10 @@ export function createApiHandler(
             ? chat.slowmodeNextSendDate
             : existing?.slowmodeNextSendDate;
           const lastSentAt = chat.lastSentAt !== undefined ? chat.lastSentAt : existing?.lastSentAt;
+          const starsCost = chat.starsCost !== undefined ? chat.starsCost : (existing?.starsCost ?? 0);
+          const status = (starsCost > 0 || chat.status === 'STARS')
+            ? 'STARS'
+            : (chat.status || (existing?.status ?? 'READY'));
 
           db.upsertGroupState({
             chatId: chat.id,
@@ -128,8 +146,9 @@ export function createApiHandler(
             otherMessagesCount: existing ? existing.otherMessagesCount : 0,
             slowmodeSeconds,
             slowmodeNextSendDate,
+            starsCost,
             lastSentAt,
-            status: existing ? existing.status : 'READY',
+            status,
           });
         });
 

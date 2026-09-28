@@ -61,6 +61,7 @@ describe('AutomationDatabase (in-memory SQLite)', () => {
       title: 'Grupo Divulga A',
       otherMessagesCount: 0,
       slowmodeSeconds: 60,
+      starsCost: 0,
       status: 'READY',
     });
 
