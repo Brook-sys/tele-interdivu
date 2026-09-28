@@ -255,6 +255,66 @@ export function createApiHandler(
         return true;
       }
 
+      // 10. POST skip-pause (Wakes up scheduler from micro-pause or round sleep)
+      if (route === 'skip-pause' && method === 'POST') {
+        scheduler.skipPause();
+        sendJson(res, 200, { success: true, message: 'Pausa pulada com sucesso' });
+        return true;
+      }
+
+      // 11. GET debug (Comprehensive diagnostics)
+      if (route === 'debug' && method === 'GET') {
+        const schedulerState = scheduler.getState();
+        const config = db.getConfig();
+        const serverNow = Math.floor(Date.now() / 1000);
+        const groups = db.getAllGroupStates();
+        const runnerStats = runner.getStats();
+
+        const evaluatedGroups = groups.map((g) => {
+          const evalResult = evaluateGroupEligibility(g, config.minOtherMessages, serverNow);
+          const slowmodeRemaining = g.slowmodeNextSendDate && g.slowmodeNextSendDate > serverNow
+            ? g.slowmodeNextSendDate - serverNow : 0;
+          return {
+            chatId: g.chatId,
+            title: g.title,
+            status: g.status,
+            evaluatedReason: evalResult.reason,
+            isEligible: evalResult.isEligible,
+            otherMessagesCount: g.otherMessagesCount,
+            minOtherMessagesRequired: config.minOtherMessages,
+            slowmodeSeconds: g.slowmodeSeconds,
+            slowmodeRemaining,
+            starsCost: g.starsCost,
+            lastSentAt: g.lastSentAt ? new Date(g.lastSentAt * 1000).toISOString() : undefined,
+            lastError: g.lastError,
+          };
+        });
+
+        const sleepRemainingSeconds = schedulerState.sleepUntil && schedulerState.sleepUntil > Date.now()
+          ? Math.round((schedulerState.sleepUntil - Date.now()) / 1000) : 0;
+        const nextRunRemainingSeconds = schedulerState.nextRunAt && schedulerState.nextRunAt > Date.now()
+          ? Math.round((schedulerState.nextRunAt - Date.now()) / 1000) : 0;
+
+        sendJson(res, 200, {
+          timestamp: new Date().toISOString(),
+          scheduler: {
+            ...schedulerState,
+            sleepRemainingSeconds,
+            nextRunRemainingSeconds,
+          },
+          connection: runnerStats,
+          config,
+          groups: evaluatedGroups,
+          system: {
+            uptime: Math.round(process.uptime()),
+            memory: process.memoryUsage(),
+            nodeVersion: process.version,
+            isProxyConfigured: Boolean(process.env.PROXY_URL),
+          },
+        });
+        return true;
+      }
+
       sendError(res, 404, `Route /api/v1/automation/${route} not found`);
       return true;
     } catch (err: any) {

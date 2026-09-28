@@ -368,3 +368,57 @@
   color: var(--color-text-secondary);
   text-align: center;
 }
+
+.debugCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+
+  font-size: 0.8125rem;
+
+  background: var(--color-background-secondary);
+}
+
+.debugTitle {
+  margin-bottom: 0.25rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.debugRow {
+  display: flex;
+  justify-content: space-between;
+  color: var(--color-text-secondary);
+}
+
+.debugVal {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+}
+
+.debugGroupRow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  margin-bottom: 0.375rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: 0.375rem;
+
+  background: var(--color-background);
+}
+
+.debugGroupName {
+  font-weight: var(--font-weight-medium);
+}
+
+.debugGroupDetails {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}

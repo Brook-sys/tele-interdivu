@@ -85,6 +85,10 @@ export class TelegramRunner {
 
   private targetChatMap = new Map<string, TargetChatInfo>();
 
+  private lastUpdateReceivedAt?: number;
+
+  private totalUpdatesReceived = 0;
+
   constructor(
     private readonly db: AutomationDatabase,
     private readonly proxyPort = 3000,
@@ -92,6 +96,15 @@ export class TelegramRunner {
 
   getIsConnected(): boolean {
     return Boolean(this.client?.isConnected());
+  }
+
+  getStats() {
+    return {
+      isConnected: this.getIsConnected(),
+      targetChatsCount: this.targetChatMap.size,
+      lastUpdateReceivedAt: this.lastUpdateReceivedAt,
+      totalUpdatesReceived: this.totalUpdatesReceived,
+    };
   }
 
   async start(
@@ -153,6 +166,9 @@ export class TelegramRunner {
 
   private handleUpdate(update: any) {
     if (!update) return;
+
+    this.totalUpdatesReceived++;
+    this.lastUpdateReceivedAt = Date.now();
 
     try {
       const messages = extractMessagesFromGramJsUpdate(update);

@@ -17,16 +17,19 @@ import {
   type AutomationGroupState,
   type AutomationLogItem,
   type AutomationStatusResponse,
+  fetchAutomationDebug,
   fetchAutomationGroups,
   fetchAutomationLogs,
   fetchAutomationStatus,
   saveAutomationCampaign,
   saveAutomationConfig,
+  skipAutomationPause,
   startAutomationTakeover,
   stopAutomationRelease,
   testSpintaxPreviews,
 } from '../../../util/promo/automationApi';
 import { classifyPromoChat, getSlowmodeRemainingSeconds } from '../../../util/promo/classifyChat';
+import { formatCountdownSeconds } from '../../../util/promo/countdownFormat';
 import { getServerTime } from '../../../util/serverTime';
 import { loadStoredSession } from '../../../util/sessions';
 import { callApi } from '../../../api/gramjs';
@@ -57,7 +60,7 @@ type StateProps = {
   promoStatusById: Record<string, PromoChatStatus>;
 };
 
-type TabType = 'campaign' | 'settings' | 'queue' | 'logs';
+type TabType = 'campaign' | 'settings' | 'queue' | 'logs' | 'debug';
 
 const STATUS_REFRESH_INTERVAL_MS = 3000;
 
@@ -77,6 +80,8 @@ const PromoAutomation = ({
   const [statusData, setStatusData] = useState<AutomationStatusResponse | undefined>();
   const [groupsData, setGroupsData] = useState<AutomationGroupState[]>([]);
   const [logsData, setLogsData] = useState<AutomationLogItem[]>([]);
+  const [debugData, setDebugData] = useState<any>();
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [isLoading, _markLoading, unmarkLoading] = useFlag(true);
   const [isSubmitting, markSubmitting, unmarkSubmitting] = useFlag();
   const [actionError, setActionError] = useState<string | undefined>();
@@ -102,11 +107,21 @@ const PromoAutomation = ({
   const [sleepStart, setSleepStart] = useState('23:30');
   const [sleepEnd, setSleepEnd] = useState('07:30');
   const [dailyLimit, setDailyLimit] = useState('80');
+  const [microPauseEnabled, setMicroPauseEnabled] = useState(true);
+  const [microPauseEveryMin, setMicroPauseEveryMin] = useState('6');
+  const [microPauseEveryMax, setMicroPauseEveryMax] = useState('10');
+  const [microPauseSeconds, setMicroPauseSeconds] = useState('300');
 
   useHistoryBack({
     isActive,
     onBack: onReset,
   });
+
+  useEffect(() => {
+    if (!isActive) return undefined;
+    const int = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(int);
+  }, [isActive]);
 
   const folder = settings.folderId !== undefined ? foldersById[settings.folderId] : undefined;
   const targetChatIds = useMemo(() => folder?.includedChatIds || [], [folder]);
@@ -135,6 +150,11 @@ const PromoAutomation = ({
           setSleepEnd(res.config.sleepWindowEnd || '07:30');
           setDailyLimit(String(res.config.dailyLimit ?? 80));
           setLinkPreview(Boolean(res.config.linkPreviewEnabled));
+          setMicroPauseEnabled(res.config.microPauseEnabled !== undefined
+            ? Boolean(res.config.microPauseEnabled) : true);
+          setMicroPauseEveryMin(String(res.config.microPauseEveryMin ?? 6));
+          setMicroPauseEveryMax(String(res.config.microPauseEveryMax ?? 10));
+          setMicroPauseSeconds(String(res.config.microPauseSeconds ?? 300));
         }
       }
 
@@ -144,6 +164,9 @@ const PromoAutomation = ({
       } else if (activeTab === 'logs') {
         const logs = await fetchAutomationLogs(50);
         setLogsData(logs);
+      } else if (activeTab === 'debug') {
+        const debug = await fetchAutomationDebug();
+        setDebugData(debug);
       }
     } catch (err: any) {
       setActionError(err.message);
@@ -280,6 +303,16 @@ const PromoAutomation = ({
     }
   });
 
+  const handleSkipPause = useLastCallback(async () => {
+    setActionError(undefined);
+    try {
+      await skipAutomationPause();
+      await loadStatusAndData();
+    } catch (err: any) {
+      setActionError(err.message);
+    }
+  });
+
   const handleSaveConfig = useLastCallback(async () => {
     setActionError(undefined);
     setSaveSuccessMsg(undefined);
@@ -297,6 +330,10 @@ const PromoAutomation = ({
         sleepWindowEnd: sleepEnd,
         dailyLimit: Number(dailyLimit) || 80,
         linkPreviewEnabled: linkPreview,
+        microPauseEnabled,
+        microPauseEveryMin: Number(microPauseEveryMin) || 6,
+        microPauseEveryMax: Number(microPauseEveryMax) || 10,
+        microPauseSeconds: Number(microPauseSeconds) || 300,
       });
       setSaveSuccessMsg(lang('PromoAutomationSaved'));
       setTimeout(() => setSaveSuccessMsg(undefined), 3000);
@@ -312,24 +349,35 @@ const PromoAutomation = ({
   const renderStatusBanner = () => {
     const status = statusData?.status || 'STOPPED';
 
+    const sleepRemaining = statusData?.sleepUntil && statusData.sleepUntil > nowMs
+      ? Math.ceil((statusData.sleepUntil - nowMs) / 1000)
+      : 0;
+    const nextRunRemaining = statusData?.nextRunAt && statusData.nextRunAt > nowMs
+      ? Math.ceil((statusData.nextRunAt - nowMs) / 1000)
+      : 0;
+
     let badgeClass = styles.badgeStopped;
     let label = lang('PromoAutomationStopped');
 
     if (status === 'RUNNING') {
       badgeClass = styles.badgeRunning;
-      label = `${lang('PromoAutomationRunning')} (Rodada ${statusData?.activeRound || 1})`;
+      if (nextRunRemaining > 0 && statusData?.currentChatTitle) {
+        label = `Enviando para ${statusData.currentChatTitle} em ${formatCountdownSeconds(nextRunRemaining)}`;
+      } else {
+        label = `${lang('PromoAutomationRunning')} (Rodada ${statusData?.activeRound || 1})`;
+      }
     } else if (status === 'WAITING_NEXT_ROUND') {
       badgeClass = styles.badgeSleep;
-      label = 'Pausa entre Rodadas';
+      label = `Pausa entre Rodadas (${formatCountdownSeconds(sleepRemaining)})`;
     } else if (status === 'SLEEP_WINDOW') {
       badgeClass = styles.badgeSleep;
       label = lang('PromoAutomationSleepWindow');
     } else if (status === 'MICRO_PAUSE') {
       badgeClass = styles.badgeMicroPause;
-      label = lang('PromoAutomationMicroPause');
+      label = `${lang('PromoAutomationMicroPause')} (${formatCountdownSeconds(sleepRemaining)})`;
     } else if (status === 'CIRCUIT_BREAKER') {
       badgeClass = styles.badgeCircuit;
-      label = lang('PromoAutomationCircuitBreaker');
+      label = `${lang('PromoAutomationCircuitBreaker')} (${formatCountdownSeconds(sleepRemaining)})`;
     }
 
     return (
@@ -339,6 +387,15 @@ const PromoAutomation = ({
           <span>{label}</span>
         </div>
         <div className={styles.controls}>
+          {isRunning && (status === 'MICRO_PAUSE' || status === 'WAITING_NEXT_ROUND') && (
+            <Button
+              color="translucent"
+              size="smaller"
+              onClick={handleSkipPause}
+            >
+              {lang('PromoAutomationSkipPause')}
+            </Button>
+          )}
           {isRunning ? (
             <Button
               color="danger"
@@ -432,6 +489,13 @@ const PromoAutomation = ({
           onClick={() => setActiveTab('logs')}
         >
           {lang('PromoAutomationLogsTab')}
+        </button>
+        <button
+          type="button"
+          className={buildClassName(styles.tabBtn, activeTab === 'debug' && styles.tabBtnActive)}
+          onClick={() => setActiveTab('debug')}
+        >
+          {lang('PromoAutomationDebugTab')}
         </button>
       </div>
     );
@@ -554,6 +618,37 @@ const PromoAutomation = ({
 
         <div className={styles.checkboxRow}>
           <Checkbox
+            checked={microPauseEnabled}
+            onCheck={setMicroPauseEnabled}
+            label={lang('PromoAutomationMicroPauseToggle')}
+          />
+        </div>
+
+        {microPauseEnabled && (
+          <div className={styles.twoCols}>
+            <InputText
+              label={lang('PromoAutomationMicroPauseMin')}
+              value={microPauseEveryMin}
+              inputMode="numeric"
+              onChange={(e) => setMicroPauseEveryMin(e.target.value)}
+            />
+            <InputText
+              label={lang('PromoAutomationMicroPauseMax')}
+              value={microPauseEveryMax}
+              inputMode="numeric"
+              onChange={(e) => setMicroPauseEveryMax(e.target.value)}
+            />
+            <InputText
+              label={lang('PromoAutomationMicroPauseDuration')}
+              value={microPauseSeconds}
+              inputMode="numeric"
+              onChange={(e) => setMicroPauseSeconds(e.target.value)}
+            />
+          </div>
+        )}
+
+        <div className={styles.checkboxRow}>
+          <Checkbox
             checked={sleepEnabled}
             onCheck={setSleepEnabled}
             label={lang('PromoAutomationSleepWindowToggle')}
@@ -652,6 +747,146 @@ const PromoAutomation = ({
     );
   };
 
+  const renderDebugTab = () => {
+    if (!debugData) {
+      return (
+        <div className={styles.loadingWrap}>
+          <Spinner />
+        </div>
+      );
+    }
+
+    const { scheduler, connection, groups: debugGroups, system } = debugData;
+
+    return (
+      <div className={styles.tabContent}>
+        <div className={styles.debugCard}>
+          <div className={styles.debugTitle}>Telemetria do Agendador (Scheduler)</div>
+          <div className={styles.debugRow}>
+            <span>Status:</span>
+            <span className={styles.debugVal}>{scheduler?.status}</span>
+          </div>
+          <div className={styles.debugRow}>
+            <span>Rodada Atual:</span>
+            <span className={styles.debugVal}>
+              #
+              {scheduler?.activeRound}
+            </span>
+          </div>
+          <div className={styles.debugRow}>
+            <span>Envios Consecutivos no Lote:</span>
+            <span className={styles.debugVal}>{scheduler?.consecutiveSendsInRun}</span>
+          </div>
+          {Boolean(scheduler?.sleepRemainingSeconds) && (
+            <div className={styles.debugRow}>
+              <span>Tempo de Pausa Restante:</span>
+              <span className={styles.debugVal}>
+                {formatCountdownSeconds(scheduler.sleepRemainingSeconds)}
+                {' ('}
+                {scheduler.sleepRemainingSeconds}
+                s)
+              </span>
+            </div>
+          )}
+          {Boolean(scheduler?.nextRunRemainingSeconds) && (
+            <div className={styles.debugRow}>
+              <span>Próximo Disparo em:</span>
+              <span className={styles.debugVal}>
+                {formatCountdownSeconds(scheduler.nextRunRemainingSeconds)}
+                {' ('}
+                {scheduler.nextRunRemainingSeconds}
+                s)
+              </span>
+            </div>
+          )}
+          {scheduler?.lastRunError && (
+            <div className={styles.debugRow}>
+              <span>Último Erro:</span>
+              <span className={buildClassName(styles.debugVal, styles.logError)}>
+                {scheduler.lastRunError}
+              </span>
+            </div>
+          )}
+          {isRunning && (scheduler?.status === 'MICRO_PAUSE' || scheduler?.status === 'WAITING_NEXT_ROUND') && (
+            <div className={styles.btnRow}>
+              <Button size="smaller" color="translucent" onClick={handleSkipPause}>
+                {lang('PromoAutomationSkipPause')}
+              </Button>
+            </div>
+          )}
+        </div>
+
+        <div className={styles.debugCard}>
+          <div className={styles.debugTitle}>Conexão Telegram (Daemon MTProto)</div>
+          <div className={styles.debugRow}>
+            <span>Status da Conexão:</span>
+            <span className={styles.debugVal}>
+              {connection?.isConnected ? '🟢 CONECTADO (Online)' : '🔴 DESCONECTADO (Offline)'}
+            </span>
+          </div>
+          <div className={styles.debugRow}>
+            <span>Total Updates Recebidos:</span>
+            <span className={styles.debugVal}>{connection?.totalUpdatesReceived || 0}</span>
+          </div>
+          <div className={styles.debugRow}>
+            <span>Último Update Recebido:</span>
+            <span className={styles.debugVal}>
+              {connection?.lastUpdateReceivedAt
+                ? new Date(connection.lastUpdateReceivedAt).toLocaleTimeString()
+                : 'Nenhum ainda'}
+            </span>
+          </div>
+          <div className={styles.debugRow}>
+            <span>Proxy Configurado:</span>
+            <span className={styles.debugVal}>{system?.isProxyConfigured ? 'SIM' : 'NÃO (Conexão Direta)'}</span>
+          </div>
+        </div>
+
+        <div className={styles.debugCard}>
+          <div className={styles.debugTitle}>
+            Diagnóstico dos Grupos (
+            {debugGroups?.length || 0}
+            )
+          </div>
+          {debugGroups?.map((g: any) => (
+            <div key={g.chatId} className={styles.debugGroupRow}>
+              <div className={styles.debugGroupName}>{g.title}</div>
+              <div className={styles.debugGroupDetails}>
+                <span>
+                  Status:
+                  {' '}
+                  <strong>{g.evaluatedReason}</strong>
+                </span>
+                <span>
+                  Msgs:
+                  {' '}
+                  {g.otherMessagesCount}
+                  /
+                  {g.minOtherMessagesRequired}
+                </span>
+                {g.slowmodeRemaining > 0 && (
+                  <span>
+                    Slowmode:
+                    {' '}
+                    {g.slowmodeRemaining}
+                    s
+                  </span>
+                )}
+                {g.starsCost > 0 && (
+                  <span className={styles.logError}>
+                    Estrelas:
+                    {' '}
+                    {g.starsCost}
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className={styles.root}>
       <div className="left-header">
@@ -684,6 +919,7 @@ const PromoAutomation = ({
             {activeTab === 'settings' && renderSettingsTab()}
             {activeTab === 'queue' && renderQueueTab()}
             {activeTab === 'logs' && renderLogsTab()}
+            {activeTab === 'debug' && renderDebugTab()}
           </>
         )}
       </div>

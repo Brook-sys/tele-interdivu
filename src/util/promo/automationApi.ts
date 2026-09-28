@@ -29,6 +29,10 @@ export interface AutomationStatusResponse {
     sleepWindowEnd: string;
     dailyLimit: number;
     linkPreviewEnabled: boolean;
+    microPauseEnabled?: boolean;
+    microPauseEveryMin?: number;
+    microPauseEveryMax?: number;
+    microPauseSeconds?: number;
   };
   campaign: {
     spintaxTemplate: string;
@@ -143,4 +147,14 @@ export function testSpintaxPreviews(
     method: 'POST',
     body: JSON.stringify({ template, links }),
   });
+}
+
+export function skipAutomationPause(): Promise<{ success: boolean; message: string }> {
+  return request<{ success: boolean; message: string }>('skip-pause', {
+    method: 'POST',
+  });
+}
+
+export function fetchAutomationDebug(): Promise<any> {
+  return request<any>('debug');
 }

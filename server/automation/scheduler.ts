@@ -111,6 +111,8 @@ export class AutomationScheduler {
 
   private sentInRound = new Set<string>();
 
+  private sleepResolve?: () => void;
+
   constructor(
     private readonly db: AutomationDatabase,
     private readonly sendCallback: SendCallback,
@@ -153,19 +155,42 @@ export class AutomationScheduler {
     this.state.sentInRoundCount = 0;
   }
 
+  skipPause() {
+    if (this.sleepResolve) {
+      const resolve = this.sleepResolve;
+      this.sleepResolve = undefined;
+      this.state.sleepUntil = undefined;
+      resolve();
+    }
+  }
+
   private async sleep(ms: number, signal: AbortSignal): Promise<void> {
     this.state.sleepUntil = Date.now() + ms;
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
+      let isDone = false;
+
+      const cleanup = () => {
+        if (isDone) return;
+        isDone = true;
+        clearTimeout(timeout);
         signal.removeEventListener('abort', onAbort);
+        this.sleepResolve = undefined;
         this.state.sleepUntil = undefined;
+      };
+
+      const timeout = setTimeout(() => {
+        cleanup();
         resolve();
       }, ms);
 
       const onAbort = () => {
-        clearTimeout(timeout);
-        this.state.sleepUntil = undefined;
+        cleanup();
         reject(new Error('Scheduler stopped'));
+      };
+
+      this.sleepResolve = () => {
+        cleanup();
+        resolve();
       };
 
       signal.addEventListener('abort', onAbort, { once: true });
@@ -194,16 +219,34 @@ export class AutomationScheduler {
           continue;
         }
 
-        // 3. Human micro-pause check (every 6 to 10 sends)
-        const microPauseThreshold = 6 + (this.state.activeRound % 5);
-        if (this.state.consecutiveSendsInRun >= microPauseThreshold) {
-          this.state.status = 'MICRO_PAUSE';
-          // 5 to 12 minutes human break
-          const pauseSec = 300 + Math.floor(Math.random() * 420);
-          await this.sleep(pauseSec * 1000, signal);
-          this.state.consecutiveSendsInRun = 0;
-          this.state.status = 'RUNNING';
-          continue;
+        // 3. Human micro-pause check
+        if (config.microPauseEnabled) {
+          const minSends = Math.max(1, config.microPauseEveryMin);
+          const maxSends = Math.max(minSends, config.microPauseEveryMax);
+          const thresholdRange = maxSends - minSends + 1;
+          const microPauseThreshold = minSends + (this.state.activeRound % thresholdRange);
+
+          if (this.state.consecutiveSendsInRun >= microPauseThreshold) {
+            this.state.status = 'MICRO_PAUSE';
+            const pauseSec = Math.max(10, config.microPauseSeconds);
+            const pauseMin = (pauseSec / 60).toFixed(1);
+
+            const pauseSnippet = `Pausa anti-ban ativada: aguardando ${pauseMin} min (${pauseSec}s) `
+              + `após ${this.state.consecutiveSendsInRun} envios consecutivos.`;
+            this.db.addLog({
+              createdAt: serverNow,
+              chatId: 'system',
+              chatTitle: 'Sistema de Automação',
+              messageSnippet: pauseSnippet,
+              linkUsed: '',
+              status: 'SKIPPED',
+            });
+
+            await this.sleep(pauseSec * 1000, signal);
+            this.state.consecutiveSendsInRun = 0;
+            this.state.status = 'RUNNING';
+            continue;
+          }
         }
 
         // 4. Find eligible group in current round (excluding blocked chats and chats that charge stars)

@@ -3198,3 +3198,9 @@
 "PromoAutomationSettingsTab" = "Ritmo Anti-Ban";
 "PromoAutomationQueueTab" = "Fila";
 "PromoAutomationLogsTab" = "Logs";
+"PromoAutomationDebugTab" = "Diagnóstico";
+"PromoAutomationSkipPause" = "Pular Pausa";
+"PromoAutomationMicroPauseToggle" = "Ativar micro-pausas humanas";
+"PromoAutomationMicroPauseMin" = "Pausar a cada mín envios";
+"PromoAutomationMicroPauseMax" = "Pausar a cada máx envios";
+"PromoAutomationMicroPauseDuration" = "Duração da micro-pausa (s)";

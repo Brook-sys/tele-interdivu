@@ -16,6 +16,10 @@ export interface AutomationDbConfig {
   sleepWindowEnd: string;
   dailyLimit: number;
   linkPreviewEnabled: boolean;
+  microPauseEnabled: boolean;
+  microPauseEveryMin: number;
+  microPauseEveryMax: number;
+  microPauseSeconds: number;
 }
 
 export interface AutomationCampaign {
@@ -59,6 +63,10 @@ export const DEFAULT_CONFIG: AutomationDbConfig = {
   sleepWindowEnd: '07:30',
   dailyLimit: 80,
   linkPreviewEnabled: false,
+  microPauseEnabled: true,
+  microPauseEveryMin: 6,
+  microPauseEveryMax: 10,
+  microPauseSeconds: 300,
 };
 
 export class AutomationDatabase {
@@ -95,7 +103,11 @@ export class AutomationDatabase {
         sleep_window_start TEXT NOT NULL,
         sleep_window_end TEXT NOT NULL,
         daily_limit INTEGER NOT NULL,
-        link_preview_enabled INTEGER NOT NULL
+        link_preview_enabled INTEGER NOT NULL,
+        micro_pause_enabled INTEGER NOT NULL DEFAULT 1,
+        micro_pause_every_min INTEGER NOT NULL DEFAULT 6,
+        micro_pause_every_max INTEGER NOT NULL DEFAULT 10,
+        micro_pause_seconds INTEGER NOT NULL DEFAULT 300
       );
 
       CREATE TABLE IF NOT EXISTS campaign (
@@ -138,9 +150,33 @@ export class AutomationDatabase {
       CREATE INDEX IF NOT EXISTS idx_logs_created_at ON logs(created_at);
     `);
 
-    // Migration for existing databases: ensure `stars_cost` column exists
+    // Migrations for existing databases: ensure new columns exist
     try {
       this.db.exec('ALTER TABLE group_state ADD COLUMN stars_cost INTEGER NOT NULL DEFAULT 0');
+    } catch {
+      // Column already exists
+    }
+
+    try {
+      this.db.exec('ALTER TABLE config ADD COLUMN micro_pause_enabled INTEGER NOT NULL DEFAULT 1');
+    } catch {
+      // Column already exists
+    }
+
+    try {
+      this.db.exec('ALTER TABLE config ADD COLUMN micro_pause_every_min INTEGER NOT NULL DEFAULT 6');
+    } catch {
+      // Column already exists
+    }
+
+    try {
+      this.db.exec('ALTER TABLE config ADD COLUMN micro_pause_every_max INTEGER NOT NULL DEFAULT 10');
+    } catch {
+      // Column already exists
+    }
+
+    try {
+      this.db.exec('ALTER TABLE config ADD COLUMN micro_pause_seconds INTEGER NOT NULL DEFAULT 300');
     } catch {
       // Column already exists
     }
@@ -164,8 +200,9 @@ export class AutomationDatabase {
         INSERT INTO config (
           id, mode, min_delay_seconds, max_delay_seconds, round_interval_minutes,
           min_other_messages, sleep_window_enabled, sleep_window_start, sleep_window_end,
-          daily_limit, link_preview_enabled
-        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          daily_limit, link_preview_enabled, micro_pause_enabled, micro_pause_every_min,
+          micro_pause_every_max, micro_pause_seconds
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         DEFAULT_CONFIG.mode,
         DEFAULT_CONFIG.minDelaySeconds,
@@ -177,6 +214,10 @@ export class AutomationDatabase {
         DEFAULT_CONFIG.sleepWindowEnd,
         DEFAULT_CONFIG.dailyLimit,
         DEFAULT_CONFIG.linkPreviewEnabled ? 1 : 0,
+        DEFAULT_CONFIG.microPauseEnabled ? 1 : 0,
+        DEFAULT_CONFIG.microPauseEveryMin,
+        DEFAULT_CONFIG.microPauseEveryMax,
+        DEFAULT_CONFIG.microPauseSeconds,
       );
     }
   }
@@ -196,6 +237,11 @@ export class AutomationDatabase {
       sleepWindowEnd: String(row.sleep_window_end),
       dailyLimit: Number(row.daily_limit),
       linkPreviewEnabled: Boolean(row.link_preview_enabled),
+      microPauseEnabled: row.micro_pause_enabled !== undefined
+        ? Boolean(row.micro_pause_enabled) : DEFAULT_CONFIG.microPauseEnabled,
+      microPauseEveryMin: Number(row.micro_pause_every_min ?? DEFAULT_CONFIG.microPauseEveryMin),
+      microPauseEveryMax: Number(row.micro_pause_every_max ?? DEFAULT_CONFIG.microPauseEveryMax),
+      microPauseSeconds: Number(row.micro_pause_seconds ?? DEFAULT_CONFIG.microPauseSeconds),
     };
   }
 
@@ -214,7 +260,11 @@ export class AutomationDatabase {
         sleep_window_start = ?,
         sleep_window_end = ?,
         daily_limit = ?,
-        link_preview_enabled = ?
+        link_preview_enabled = ?,
+        micro_pause_enabled = ?,
+        micro_pause_every_min = ?,
+        micro_pause_every_max = ?,
+        micro_pause_seconds = ?
       WHERE id = 1
     `).run(
       next.mode,
@@ -227,6 +277,10 @@ export class AutomationDatabase {
       next.sleepWindowEnd,
       next.dailyLimit,
       next.linkPreviewEnabled ? 1 : 0,
+      next.microPauseEnabled ? 1 : 0,
+      next.microPauseEveryMin,
+      next.microPauseEveryMax,
+      next.microPauseSeconds,
     );
 
     return next;

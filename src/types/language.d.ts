@@ -2356,6 +2356,12 @@ export interface LangPair {
   'PromoAutomationSettingsTab': undefined;
   'PromoAutomationQueueTab': undefined;
   'PromoAutomationLogsTab': undefined;
+  'PromoAutomationDebugTab': undefined;
+  'PromoAutomationSkipPause': undefined;
+  'PromoAutomationMicroPauseToggle': undefined;
+  'PromoAutomationMicroPauseMin': undefined;
+  'PromoAutomationMicroPauseMax': undefined;
+  'PromoAutomationMicroPauseDuration': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
