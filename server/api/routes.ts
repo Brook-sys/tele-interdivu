@@ -79,6 +79,7 @@ export function createApiHandler(
 
         const isRunning = schedulerState.status === 'RUNNING'
           || schedulerState.status === 'WAITING_NEXT_ROUND'
+          || schedulerState.status === 'WAITING_COOLDOWN'
           || schedulerState.status === 'MICRO_PAUSE'
           || schedulerState.status === 'SLEEP_WINDOW'
           || schedulerState.status === 'CIRCUIT_BREAKER';
@@ -86,6 +87,7 @@ export function createApiHandler(
         sendJson(res, 200, {
           isRunning,
           status: schedulerState.status,
+          waitingReason: schedulerState.waitingReason,
           isTelegramConnected: runner.getIsConnected(),
           currentChatId: schedulerState.currentChatId,
           currentChatTitle: schedulerState.currentChatTitle,
@@ -152,10 +154,9 @@ export function createApiHandler(
           });
         });
 
-        // Start runner with Telegram session
+        // Restart runner and scheduler cleanly
+        scheduler.stop();
         await runner.start(body.sessionData, body.targetChats);
-
-        // Start scheduler loop
         scheduler.start();
 
         sendJson(res, 200, { success: true, message: 'Automation takeover successful' });
@@ -252,6 +253,20 @@ export function createApiHandler(
       if (route === 'reset-round' && method === 'POST') {
         scheduler.resetRound();
         sendJson(res, 200, { success: true, message: 'Round counters reset' });
+        return true;
+      }
+
+      // 9b. POST force-new-round (Clears sent list and starts next round immediately)
+      if (route === 'force-new-round' && method === 'POST') {
+        scheduler.forceNewRound();
+        sendJson(res, 200, { success: true, message: 'Nova rodada iniciada com sucesso' });
+        return true;
+      }
+
+      // 9c. POST reconnect (Forces Telegram MTProto connection refresh)
+      if (route === 'reconnect' && method === 'POST') {
+        const ok = await runner.reconnect();
+        sendJson(res, 200, { success: ok, message: ok ? 'Reconectado com sucesso' : 'Falha na reconexão' });
         return true;
       }
 

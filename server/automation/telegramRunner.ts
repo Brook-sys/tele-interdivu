@@ -89,6 +89,8 @@ export class TelegramRunner {
 
   private totalUpdatesReceived = 0;
 
+  private historyCheckCache = new Map<string, { lastCheckedAt: number; count: number }>();
+
   constructor(
     private readonly db: AutomationDatabase,
     private readonly proxyPort = 3000,
@@ -116,6 +118,7 @@ export class TelegramRunner {
     }
 
     this.targetChatMap.clear();
+    this.historyCheckCache.clear();
     targetChats.forEach((chat) => {
       this.targetChatMap.set(chat.id, chat);
     });
@@ -143,6 +146,15 @@ export class TelegramRunner {
       },
     );
 
+    // Keep session alive periodically by fetching config every 30 minutes
+    client.setPingCallback(async () => {
+      try {
+        await client.invoke(new GramJs.help.GetConfig());
+      } catch {
+        // ignore ping error
+      }
+    });
+
     const eventBuilder = { build: (u: any) => u } as any;
     client.addEventHandler((update: any) => {
       this.handleUpdate(update);
@@ -150,6 +162,17 @@ export class TelegramRunner {
 
     await client.connect();
     this.client = client;
+  }
+
+  async reconnect(): Promise<boolean> {
+    if (!this.client) return false;
+    try {
+      this.client.disconnect();
+      await this.client.connect();
+      return this.client.isConnected();
+    } catch {
+      return false;
+    }
   }
 
   stop(): Promise<void> {
@@ -180,9 +203,14 @@ export class TelegramRunner {
 
         if (message.out) {
           // Message sent by our account in this group: reset other messages counter
+          this.historyCheckCache.delete(chatId);
           this.db.resetGroupOtherMessages(chatId, message.date || Math.floor(Date.now() / 1000));
         } else {
           // Message sent by another member: increment other messages counter
+          const cached = this.historyCheckCache.get(chatId);
+          if (cached) {
+            cached.count++;
+          }
           this.db.incrementGroupOtherMessages(chatId);
         }
       }
@@ -195,15 +223,29 @@ export class TelegramRunner {
     chatId: string,
     minRequired: number,
   ): Promise<number> {
+    const groupState = this.db.getGroupState(chatId);
+    const localCount = groupState?.otherMessagesCount || 0;
+
+    // If local updates already reached minRequired, no need to touch network
+    if (localCount >= minRequired) {
+      return localCount;
+    }
+
+    // Rate-limit network GetHistory to once per 5 minutes per chat
+    const now = Date.now();
+    const cached = this.historyCheckCache.get(chatId);
+    if (cached && (now - cached.lastCheckedAt) < 300_000) {
+      return cached.count;
+    }
+
     if (!this.client || !this.client.isConnected()) {
-      return 0;
+      return localCount;
     }
 
     const chatInfo = this.targetChatMap.get(chatId);
-    if (!chatInfo) return 0;
+    if (!chatInfo) return localCount;
 
     const peer = buildInputPeerForChat(chatId, chatInfo.accessHash);
-    const groupState = this.db.getGroupState(chatId);
     const lastSentAt = groupState?.lastSentAt;
 
     try {
@@ -234,10 +276,11 @@ export class TelegramRunner {
         count++;
       }
 
+      this.historyCheckCache.set(chatId, { lastCheckedAt: now, count });
       this.db.setGroupOtherMessagesCount(chatId, count);
       return count;
     } catch {
-      return groupState?.otherMessagesCount || 0;
+      return localCount;
     }
   }
 

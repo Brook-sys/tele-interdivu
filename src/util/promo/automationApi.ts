@@ -1,6 +1,16 @@
+export type AutomationStatusType =
+  | 'STOPPED'
+  | 'RUNNING'
+  | 'PAUSED'
+  | 'SLEEP_WINDOW'
+  | 'CIRCUIT_BREAKER'
+  | 'MICRO_PAUSE'
+  | 'WAITING_NEXT_ROUND'
+  | 'WAITING_COOLDOWN';
+
 export interface AutomationStatusResponse {
   isRunning: boolean;
-  status: 'STOPPED' | 'RUNNING' | 'PAUSED' | 'SLEEP_WINDOW' | 'CIRCUIT_BREAKER' | 'MICRO_PAUSE' | 'WAITING_NEXT_ROUND';
+  status: AutomationStatusType;
   isTelegramConnected: boolean;
   currentChatId?: string;
   currentChatTitle?: string;
@@ -8,6 +18,7 @@ export interface AutomationStatusResponse {
   sleepUntil?: number;
   activeRound: number;
   sentInRoundCount?: number;
+  waitingReason?: string;
   lastError?: string;
   stats: {
     todaySent: number;
@@ -17,6 +28,7 @@ export interface AutomationStatusResponse {
     waitingSlowmodeCount: number;
     waitingMessagesCount: number;
     blockedCount: number;
+    starsCount?: number;
   };
   config: {
     mode: 'manual' | 'continuous';
@@ -24,6 +36,7 @@ export interface AutomationStatusResponse {
     maxDelaySeconds: number;
     roundIntervalMinutes: number;
     minOtherMessages: number;
+    minOtherMessagesTimeoutHours?: number;
     sleepWindowEnabled: boolean;
     sleepWindowStart: string;
     sleepWindowEnd: string;
@@ -157,4 +170,16 @@ export function skipAutomationPause(): Promise<{ success: boolean; message: stri
 
 export function fetchAutomationDebug(): Promise<any> {
   return request<any>('debug');
+}
+
+export function forceNewAutomationRound(): Promise<{ success: boolean; message: string }> {
+  return request<{ success: boolean; message: string }>('force-new-round', {
+    method: 'POST',
+  });
+}
+
+export function reconnectAutomationTelegram(): Promise<{ success: boolean; message: string }> {
+  return request<{ success: boolean; message: string }>('reconnect', {
+    method: 'POST',
+  });
 }

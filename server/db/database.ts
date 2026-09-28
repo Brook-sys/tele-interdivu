@@ -11,6 +11,7 @@ export interface AutomationDbConfig {
   maxDelaySeconds: number;
   roundIntervalMinutes: number;
   minOtherMessages: number;
+  minOtherMessagesTimeoutHours: number;
   sleepWindowEnabled: boolean;
   sleepWindowStart: string;
   sleepWindowEnd: string;
@@ -58,6 +59,7 @@ export const DEFAULT_CONFIG: AutomationDbConfig = {
   maxDelaySeconds: 180,
   roundIntervalMinutes: 120,
   minOtherMessages: 5,
+  minOtherMessagesTimeoutHours: 4,
   sleepWindowEnabled: true,
   sleepWindowStart: '23:30',
   sleepWindowEnd: '07:30',
@@ -107,7 +109,8 @@ export class AutomationDatabase {
         micro_pause_enabled INTEGER NOT NULL DEFAULT 1,
         micro_pause_every_min INTEGER NOT NULL DEFAULT 6,
         micro_pause_every_max INTEGER NOT NULL DEFAULT 10,
-        micro_pause_seconds INTEGER NOT NULL DEFAULT 300
+        micro_pause_seconds INTEGER NOT NULL DEFAULT 300,
+        min_other_messages_timeout_hours INTEGER NOT NULL DEFAULT 4
       );
 
       CREATE TABLE IF NOT EXISTS campaign (
@@ -181,6 +184,12 @@ export class AutomationDatabase {
       // Column already exists
     }
 
+    try {
+      this.db.exec('ALTER TABLE config ADD COLUMN min_other_messages_timeout_hours INTEGER NOT NULL DEFAULT 4');
+    } catch {
+      // Column already exists
+    }
+
     // Auto-quarantine any groups that previously failed with ALLOW_PAYMENT_REQUIRED
     try {
       this.db.exec(`
@@ -201,8 +210,8 @@ export class AutomationDatabase {
           id, mode, min_delay_seconds, max_delay_seconds, round_interval_minutes,
           min_other_messages, sleep_window_enabled, sleep_window_start, sleep_window_end,
           daily_limit, link_preview_enabled, micro_pause_enabled, micro_pause_every_min,
-          micro_pause_every_max, micro_pause_seconds
-        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          micro_pause_every_max, micro_pause_seconds, min_other_messages_timeout_hours
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         DEFAULT_CONFIG.mode,
         DEFAULT_CONFIG.minDelaySeconds,
@@ -218,6 +227,7 @@ export class AutomationDatabase {
         DEFAULT_CONFIG.microPauseEveryMin,
         DEFAULT_CONFIG.microPauseEveryMax,
         DEFAULT_CONFIG.microPauseSeconds,
+        DEFAULT_CONFIG.minOtherMessagesTimeoutHours,
       );
     }
   }
@@ -232,6 +242,9 @@ export class AutomationDatabase {
       maxDelaySeconds: Number(row.max_delay_seconds),
       roundIntervalMinutes: Number(row.round_interval_minutes),
       minOtherMessages: Number(row.min_other_messages),
+      minOtherMessagesTimeoutHours: Number(
+        row.min_other_messages_timeout_hours ?? DEFAULT_CONFIG.minOtherMessagesTimeoutHours,
+      ),
       sleepWindowEnabled: Boolean(row.sleep_window_enabled),
       sleepWindowStart: String(row.sleep_window_start),
       sleepWindowEnd: String(row.sleep_window_end),
@@ -264,7 +277,8 @@ export class AutomationDatabase {
         micro_pause_enabled = ?,
         micro_pause_every_min = ?,
         micro_pause_every_max = ?,
-        micro_pause_seconds = ?
+        micro_pause_seconds = ?,
+        min_other_messages_timeout_hours = ?
       WHERE id = 1
     `).run(
       next.mode,
@@ -281,6 +295,7 @@ export class AutomationDatabase {
       next.microPauseEveryMin,
       next.microPauseEveryMax,
       next.microPauseSeconds,
+      next.minOtherMessagesTimeoutHours,
     );
 
     return next;

@@ -73,16 +73,32 @@ describe('evaluateGroupEligibility', () => {
     const result = evaluateGroupEligibility({
       chatId: '-1',
       title: 'Grupo A',
-      lastSentAt: now - 3600,
+      lastSentAt: now - 3600, // 1 hour ago
       otherMessagesCount: 3, // less than 5
       slowmodeSeconds: 60,
       starsCost: 0,
       status: 'READY',
       updatedAt: now,
-    }, 5, now);
+    }, 5, now, 4);
 
     expect(result.isEligible).toBe(false);
     expect(result.reason).toBe('WAITING_MESSAGES');
+  });
+
+  it('releases group waiting for messages if inactive for longer than messageTimeoutHours', () => {
+    const result = evaluateGroupEligibility({
+      chatId: '-1',
+      title: 'Grupo A',
+      lastSentAt: now - (5 * 3600), // 5 hours ago (> 4h timeout)
+      otherMessagesCount: 1, // less than 5, but quiet for 5h
+      slowmodeSeconds: 60,
+      starsCost: 0,
+      status: 'READY',
+      updatedAt: now,
+    }, 5, now, 4);
+
+    expect(result.isEligible).toBe(true);
+    expect(result.reason).toBe('READY');
   });
 
   it('blocks group waiting for slowmode countdown', () => {

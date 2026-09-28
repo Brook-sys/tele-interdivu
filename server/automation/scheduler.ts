@@ -2,8 +2,18 @@ import type { AutomationDatabase, GroupStateRecord } from '../db/database';
 
 import { compileSpunMessage } from './spintax';
 
+export type SchedulerStatus =
+  | 'STOPPED'
+  | 'RUNNING'
+  | 'PAUSED'
+  | 'SLEEP_WINDOW'
+  | 'CIRCUIT_BREAKER'
+  | 'MICRO_PAUSE'
+  | 'WAITING_NEXT_ROUND'
+  | 'WAITING_COOLDOWN';
+
 export interface SchedulerState {
-  status: 'STOPPED' | 'RUNNING' | 'PAUSED' | 'SLEEP_WINDOW' | 'CIRCUIT_BREAKER' | 'MICRO_PAUSE' | 'WAITING_NEXT_ROUND';
+  status: SchedulerStatus;
   currentChatId?: string;
   currentChatTitle?: string;
   nextRunAt?: number; // epoch ms
@@ -12,6 +22,7 @@ export interface SchedulerState {
   sentInRoundCount: number;
   consecutiveFloodWaits: number;
   consecutiveSendsInRun: number;
+  waitingReason?: string;
   lastRunError?: string;
 }
 
@@ -56,6 +67,7 @@ export function evaluateGroupEligibility(
   group: GroupStateRecord,
   minOtherMessages: number,
   serverNow: number,
+  messageTimeoutHours = 4,
 ): { isEligible: boolean; reason: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' | 'STARS' } {
   if (group.status === 'BLOCKED') {
     return { isEligible: false, reason: 'BLOCKED' };
@@ -77,8 +89,13 @@ export function evaluateGroupEligibility(
     }
   }
 
-  // Strict N other messages requirement applies only once we have sent to this group previously
+  // Strict N other messages requirement applies once we have sent to this group previously.
+  // Inactivity timeout: if more than `messageTimeoutHours` elapsed since last send, release the requirement.
   if (group.lastSentAt && group.otherMessagesCount < minOtherMessages) {
+    const elapsedSeconds = serverNow - group.lastSentAt;
+    if (messageTimeoutHours > 0 && elapsedSeconds >= messageTimeoutHours * 3600) {
+      return { isEligible: true, reason: 'READY' };
+    }
     return { isEligible: false, reason: 'WAITING_MESSAGES' };
   }
 
@@ -153,6 +170,13 @@ export class AutomationScheduler {
   resetRound() {
     this.sentInRound.clear();
     this.state.sentInRoundCount = 0;
+  }
+
+  forceNewRound() {
+    this.sentInRound.clear();
+    this.state.sentInRoundCount = 0;
+    this.state.activeRound++;
+    this.skipPause();
   }
 
   skipPause() {
@@ -297,15 +321,33 @@ export class AutomationScheduler {
 
         // Look for the next ready group among remainingInRound
         let eligibleGroup: GroupStateRecord | undefined;
+        let minSlowmodeWaitSeconds = Infinity;
+        let slowestGroupTitle = '';
+        let countWaitingSlowmode = 0;
 
         for (const g of remainingInRound) {
-          let evalResult = evaluateGroupEligibility(g, config.minOtherMessages, serverNow);
+          let evalResult = evaluateGroupEligibility(
+            g,
+            config.minOtherMessages,
+            serverNow,
+            config.minOtherMessagesTimeoutHours,
+          );
 
-          // If waiting for messages and we have a checker callback, query Telegram history for fresh count
-          if (evalResult.reason === 'WAITING_MESSAGES' && this.checkMessagesCallback) {
-            const verifiedCount = await this.checkMessagesCallback(g.chatId, config.minOtherMessages);
-            if (verifiedCount >= config.minOtherMessages) {
-              evalResult = { isEligible: true, reason: 'READY' };
+          if (evalResult.reason === 'WAITING_SLOWMODE') {
+            countWaitingSlowmode++;
+            const remaining = g.slowmodeNextSendDate && g.slowmodeNextSendDate > serverNow
+              ? g.slowmodeNextSendDate - serverNow : (g.slowmodeSeconds || 60);
+            if (remaining < minSlowmodeWaitSeconds) {
+              minSlowmodeWaitSeconds = remaining;
+              slowestGroupTitle = g.title;
+            }
+          } else if (evalResult.reason === 'WAITING_MESSAGES') {
+            // Check Telegram history only if needed (debounced inside runner)
+            if (this.checkMessagesCallback) {
+              const verifiedCount = await this.checkMessagesCallback(g.chatId, config.minOtherMessages);
+              if (verifiedCount >= config.minOtherMessages) {
+                evalResult = { isEligible: true, reason: 'READY' };
+              }
             }
           }
 
@@ -316,10 +358,58 @@ export class AutomationScheduler {
         }
 
         if (!eligibleGroup) {
-          // Groups exist in the round, but none are ready right now (slowmode or waiting for messages)
-          // Wait 15 seconds before checking again. Do not stop the round!
-          await this.sleep(15_000, signal);
-          continue;
+          // No groups are immediately ready in remainingInRound!
+          const maxAcceptableSlowmodeWait = Math.min(300, config.roundIntervalMinutes * 60);
+
+          if (countWaitingSlowmode > 0 && minSlowmodeWaitSeconds <= maxAcceptableSlowmodeWait) {
+            // Group slowmode will expire shortly - wait for it with clear status!
+            this.state.status = 'WAITING_COOLDOWN';
+            this.state.currentChatTitle = slowestGroupTitle;
+            this.state.waitingReason = `Aguardando cooldown de ${slowestGroupTitle}`;
+            const waitMs = Math.max(5, minSlowmodeWaitSeconds) * 1000;
+            await this.sleep(waitMs, signal);
+            this.state.currentChatTitle = undefined;
+            this.state.waitingReason = undefined;
+            this.state.status = 'RUNNING';
+            continue;
+          }
+
+          // If no groups can be sent soon (remaining are blocked by slowmode or waiting messages):
+          // Conclude the current round and let the next round re-evaluate all groups!
+          if (config.mode === 'manual') {
+            this.state.status = 'STOPPED';
+            const snippet = `Rodada manual #${this.state.activeRound} finalizada. `
+              + `${this.sentInRound.size} grupos enviados; ${remainingInRound.length} aguardando mensagens/cooldown.`;
+            this.db.addLog({
+              createdAt: serverNow,
+              chatId: 'system',
+              chatTitle: 'Sistema de Automação',
+              messageSnippet: snippet,
+              linkUsed: '',
+              status: 'SUCCESS',
+            });
+            break;
+          } else {
+            this.state.status = 'WAITING_NEXT_ROUND';
+            const snippet = `Rodada #${this.state.activeRound} concluída `
+              + `(${this.sentInRound.size} grupos enviados, ${remainingInRound.length} adiados para a próxima rodada). `
+              + `Próxima rodada em ${config.roundIntervalMinutes} min.`;
+            this.db.addLog({
+              createdAt: serverNow,
+              chatId: 'system',
+              chatTitle: 'Sistema de Automação',
+              messageSnippet: snippet,
+              linkUsed: '',
+              status: 'SUCCESS',
+            });
+            const pauseMs = Math.max(1, config.roundIntervalMinutes) * 60 * 1000;
+            await this.sleep(pauseMs, signal);
+            this.sentInRound.clear();
+            this.state.sentInRoundCount = 0;
+            this.state.activeRound++;
+            this.state.status = 'RUNNING';
+            continue;
+          }
         }
 
         // 5. Compile and send message

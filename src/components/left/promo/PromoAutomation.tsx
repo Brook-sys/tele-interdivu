@@ -21,6 +21,8 @@ import {
   fetchAutomationGroups,
   fetchAutomationLogs,
   fetchAutomationStatus,
+  forceNewAutomationRound,
+  reconnectAutomationTelegram,
   saveAutomationCampaign,
   saveAutomationConfig,
   skipAutomationPause,
@@ -103,6 +105,7 @@ const PromoAutomation = ({
   const [maxDelay, setMaxDelay] = useState('180');
   const [roundInterval, setRoundInterval] = useState('120');
   const [minOtherMsgs, setMinOtherMsgs] = useState('5');
+  const [minOtherMsgsTimeoutHours, setMinOtherMsgsTimeoutHours] = useState('4');
   const [sleepEnabled, setSleepEnabled] = useState(true);
   const [sleepStart, setSleepStart] = useState('23:30');
   const [sleepEnd, setSleepEnd] = useState('07:30');
@@ -145,6 +148,7 @@ const PromoAutomation = ({
           setMaxDelay(String(res.config.maxDelaySeconds ?? 180));
           setRoundInterval(String(res.config.roundIntervalMinutes ?? 120));
           setMinOtherMsgs(String(res.config.minOtherMessages ?? 5));
+          setMinOtherMsgsTimeoutHours(String(res.config.minOtherMessagesTimeoutHours ?? 4));
           setSleepEnabled(Boolean(res.config.sleepWindowEnabled));
           setSleepStart(res.config.sleepWindowStart || '23:30');
           setSleepEnd(res.config.sleepWindowEnd || '07:30');
@@ -313,6 +317,28 @@ const PromoAutomation = ({
     }
   });
 
+  const handleForceNewRound = useLastCallback(async () => {
+    setActionError(undefined);
+    try {
+      await forceNewAutomationRound();
+      await loadStatusAndData();
+    } catch (err: any) {
+      setActionError(err.message);
+    }
+  });
+
+  const handleReconnect = useLastCallback(async () => {
+    setActionError(undefined);
+    try {
+      const res = await reconnectAutomationTelegram();
+      setSaveSuccessMsg(res.message);
+      setTimeout(() => setSaveSuccessMsg(undefined), 3000);
+      await loadStatusAndData();
+    } catch (err: any) {
+      setActionError(err.message);
+    }
+  });
+
   const handleSaveConfig = useLastCallback(async () => {
     setActionError(undefined);
     setSaveSuccessMsg(undefined);
@@ -325,6 +351,7 @@ const PromoAutomation = ({
         maxDelaySeconds: Number(maxDelay) || 180,
         roundIntervalMinutes: Number(roundInterval) || 120,
         minOtherMessages: Number(minOtherMsgs) || 1,
+        minOtherMessagesTimeoutHours: Number(minOtherMsgsTimeoutHours) || 4,
         sleepWindowEnabled: sleepEnabled,
         sleepWindowStart: sleepStart,
         sleepWindowEnd: sleepEnd,
@@ -366,6 +393,11 @@ const PromoAutomation = ({
       } else {
         label = `${lang('PromoAutomationRunning')} (Rodada ${statusData?.activeRound || 1})`;
       }
+    } else if (status === 'WAITING_COOLDOWN') {
+      badgeClass = styles.badgeSleep;
+      label = statusData?.waitingReason
+        ? `${statusData.waitingReason} (${formatCountdownSeconds(sleepRemaining)})`
+        : `Aguardando Cooldown (${formatCountdownSeconds(sleepRemaining)})`;
     } else if (status === 'WAITING_NEXT_ROUND') {
       badgeClass = styles.badgeSleep;
       label = `Pausa entre Rodadas (${formatCountdownSeconds(sleepRemaining)})`;
@@ -387,7 +419,8 @@ const PromoAutomation = ({
           <span>{label}</span>
         </div>
         <div className={styles.controls}>
-          {isRunning && (status === 'MICRO_PAUSE' || status === 'WAITING_NEXT_ROUND') && (
+          {isRunning
+            && (status === 'MICRO_PAUSE' || status === 'WAITING_NEXT_ROUND' || status === 'WAITING_COOLDOWN') && (
             <Button
               color="translucent"
               size="smaller"
@@ -610,6 +643,13 @@ const PromoAutomation = ({
         />
 
         <InputText
+          label="Tempo limite para esperar msgs (horas - padrão 4h)"
+          value={minOtherMsgsTimeoutHours}
+          inputMode="numeric"
+          onChange={(e) => setMinOtherMsgsTimeoutHours(e.target.value)}
+        />
+
+        <InputText
           label={lang('PromoAutomationDailyLimit')}
           value={dailyLimit}
           inputMode="numeric"
@@ -807,10 +847,15 @@ const PromoAutomation = ({
               </span>
             </div>
           )}
-          {isRunning && (scheduler?.status === 'MICRO_PAUSE' || scheduler?.status === 'WAITING_NEXT_ROUND') && (
+          {isRunning && (
             <div className={styles.btnRow}>
-              <Button size="smaller" color="translucent" onClick={handleSkipPause}>
-                {lang('PromoAutomationSkipPause')}
+              {Boolean(scheduler?.sleepRemainingSeconds) && (
+                <Button size="smaller" color="translucent" onClick={handleSkipPause}>
+                  {lang('PromoAutomationSkipPause')}
+                </Button>
+              )}
+              <Button size="smaller" color="primary" onClick={handleForceNewRound}>
+                Forçar Nova Rodada
               </Button>
             </div>
           )}
@@ -839,6 +884,11 @@ const PromoAutomation = ({
           <div className={styles.debugRow}>
             <span>Proxy Configurado:</span>
             <span className={styles.debugVal}>{system?.isProxyConfigured ? 'SIM' : 'NÃO (Conexão Direta)'}</span>
+          </div>
+          <div className={styles.btnRow}>
+            <Button size="smaller" color="translucent" onClick={handleReconnect}>
+              Reconectar Telegram
+            </Button>
           </div>
         </div>
 

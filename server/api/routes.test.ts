@@ -123,4 +123,24 @@ describe('Automation REST API routes', () => {
     expect(res.status).toBe(200);
     expect(res.data.success).toBe(true);
   });
+
+  it('POST skip-pause returns success', async () => {
+    const res = await api('skip-pause', { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(res.data.success).toBe(true);
+  });
+
+  it('POST force-new-round returns success', async () => {
+    const res = await api('force-new-round', { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(res.data.success).toBe(true);
+  });
+
+  it('GET debug returns system and group telemetry', async () => {
+    const res = await api('debug');
+    expect(res.status).toBe(200);
+    expect(res.data.system).toBeDefined();
+    expect(res.data.scheduler).toBeDefined();
+    expect(Array.isArray(res.data.groups)).toBe(true);
+  });
 });

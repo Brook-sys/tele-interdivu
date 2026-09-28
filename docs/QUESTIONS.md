@@ -222,3 +222,21 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     removendo grupos que não estão mais na pasta ou que foram desqualificados.
     Grupos em cooldown ativo entram como `WAITING_SLOWMODE` e só são
     acionados quando o tempo expira e chegam as mensagens de terceiros.
+
+43. **Deadlock da rodada (Starvation de grupos rápidos por causa de grupos lentos)**
+    — Se a rodada tinha 23 grupos e 13 foram enviados, os 10 restantes não podiam
+    enviar (cooldown longo ou esperando mensagens). O scheduler caía em
+    `await this.sleep(15_000)` eterno, dormindo 15s e acordando, sem que os 13
+    grupos que já estavam prontos pudessem receber novas mensagens.
+    Fix: (1) Se há grupos com slowmode prestes a liberar (< 5 min), entra em
+    `WAITING_COOLDOWN` com contagem regressiva real e botão "Pular Espera";
+    (2) Se todos os restantes estão bloqueados por mensagens ou slowmode longo,
+    conclui a rodada atual e agenda a próxima rodada normalmente (`WAITING_NEXT_ROUND`);
+    (3) Adicionado `minOtherMessagesTimeoutHours` (padrão 4h) para evitar que grupos
+    parados fiquem presos para sempre; (4) Botão "Forçar Nova Rodada" no painel.
+
+44. **Rate-limit no GetHistory do TelegramRunner** — A cada 15 segundos o scheduler
+    fazia GetHistory para todos os grupos em `WAITING_MESSAGES`. Fix: cache TTL de
+    5 minutos por chat (`historyCheckCache`); updates do WebSocket já alimentam
+    o contador em tempo real sem chamadas de rede. Ping periódico via `help.GetConfig`
+    a cada 30 minutos previne desconexões silenciosas de MTProto no Node.js.
