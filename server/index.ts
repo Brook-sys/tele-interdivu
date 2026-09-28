@@ -13,9 +13,11 @@ const PROXY_URL = process.env.PROXY_URL;
 
 const db = new AutomationDatabase();
 const runner = new TelegramRunner(db, PORT);
-const scheduler = new AutomationScheduler(db, async (chatId, text, linkUsed) => {
-  return runner.sendMessage(chatId, text);
-});
+const scheduler = new AutomationScheduler(
+  db,
+  (chatId, text) => runner.sendMessage(chatId, text),
+  (chatId, minRequired) => runner.checkOtherMessagesCount(chatId, minRequired),
+);
 
 const apiHandler = createApiHandler(db, runner, scheduler);
 

@@ -8,10 +8,10 @@ import {
 } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
-import type { ApiChat, ApiChatFolder } from '../../../api/types';
-import type { PromoSettings } from '../../../global/types/promo';
+import type { ApiChat, ApiChatFolder, ApiChatFullInfo } from '../../../api/types';
+import type { PromoChatStatus, PromoSettings } from '../../../global/types/promo';
 
-import { selectPromoSettings } from '../../../global/selectors/promo';
+import { selectPromoSettings, selectPromoUserState } from '../../../global/selectors/promo';
 import buildClassName from '../../../util/buildClassName';
 import {
   type AutomationGroupState,
@@ -51,6 +51,8 @@ type StateProps = {
   settings: PromoSettings;
   chatsById: Record<string, ApiChat>;
   foldersById: Record<number, ApiChatFolder>;
+  fullInfoById: Record<string, ApiChatFullInfo>;
+  promoStatusById: Record<string, PromoChatStatus>;
 };
 
 type TabType = 'campaign' | 'settings' | 'queue' | 'logs';
@@ -63,6 +65,8 @@ const PromoAutomation = ({
   settings,
   chatsById,
   foldersById,
+  fullInfoById,
+  promoStatusById,
 }: OwnProps & StateProps) => {
   const { initApi } = getActions();
   const lang = useLang();
@@ -169,10 +173,15 @@ const PromoAutomation = ({
 
       const targetChats = targetChatIds.map((id) => {
         const chat = chatsById[id];
+        const fullInfo = fullInfoById[id];
+        const status = promoStatusById[id];
         return {
           id,
           title: chat?.title || `Chat ${id}`,
           accessHash: chat?.accessHash,
+          slowmodeSeconds: fullInfo?.slowMode?.seconds || 0,
+          slowmodeNextSendDate: fullInfo?.slowMode?.nextSendDate,
+          lastSentAt: status?.lastOwnMessageAt,
         };
       });
 
@@ -284,7 +293,10 @@ const PromoAutomation = ({
 
     if (status === 'RUNNING') {
       badgeClass = styles.badgeRunning;
-      label = lang('PromoAutomationRunning');
+      label = `${lang('PromoAutomationRunning')} (Rodada ${statusData?.activeRound || 1})`;
+    } else if (status === 'WAITING_NEXT_ROUND') {
+      badgeClass = styles.badgeSleep;
+      label = 'Pausa entre Rodadas';
     } else if (status === 'SLEEP_WINDOW') {
       badgeClass = styles.badgeSleep;
       label = lang('PromoAutomationSleepWindow');
@@ -335,23 +347,32 @@ const PromoAutomation = ({
       <div className={styles.statsGrid}>
         <div className={styles.statCard}>
           <div className={styles.statValue}>
+            {statusData.sentInRoundCount || 0}
+            {' / '}
+            {stats.totalGroups}
+          </div>
+          <div className={styles.statLabel}>Enviados na Rodada</div>
+        </div>
+        <div className={styles.statCard}>
+          <div className={styles.statValue}>
             {stats.todaySent}
             {' / '}
             {stats.dailyLimit}
           </div>
-          <div className={styles.statLabel}>Enviados Hoje</div>
+          <div className={styles.statLabel}>Total Hoje</div>
         </div>
         <div className={styles.statCard}>
           <div className={styles.statValue}>{stats.readyCount}</div>
           <div className={styles.statLabel}>Prontos</div>
         </div>
         <div className={styles.statCard}>
-          <div className={styles.statValue}>{stats.waitingMessagesCount}</div>
-          <div className={styles.statLabel}>Aguardando Msgs</div>
-        </div>
-        <div className={styles.statCard}>
-          <div className={styles.statValue}>{stats.waitingSlowmodeCount}</div>
-          <div className={styles.statLabel}>Em Slowmode</div>
+          <div className={styles.statValue}>
+            {stats.waitingMessagesCount}
+            {' msgs / '}
+            {stats.waitingSlowmodeCount}
+            {' slow'}
+          </div>
+          <div className={styles.statLabel}>Aguardando</div>
         </div>
       </div>
     );
@@ -550,6 +571,7 @@ const PromoAutomation = ({
               <div className={styles.queueMain}>
                 <span className={styles.queueTitle}>{g.title}</span>
                 <span className={styles.queueSub}>
+                  {g.lastSentAt ? `Enviado ${new Date(g.lastSentAt * 1000).toLocaleTimeString()} · ` : 'Nunca · '}
                   Msgs de terceiros:
                   {' '}
                   {g.otherMessagesCount}
@@ -563,6 +585,7 @@ const PromoAutomation = ({
                 g.status === 'WAITING_SLOWMODE' && styles.queueSlow,
                 g.status === 'WAITING_MESSAGES' && styles.queueWait,
                 g.status === 'BLOCKED' && styles.queueBlocked,
+                g.status === 'SENT' && styles.queueReady,
               )}
               >
                 {g.status}
@@ -648,6 +671,8 @@ export default memo(withGlobal<OwnProps>(
       settings: selectPromoSettings(global),
       chatsById: global.chats.byId,
       foldersById: global.chatFolders.byId,
+      fullInfoById: global.chats.fullInfoById,
+      promoStatusById: selectPromoUserState(global).statusById,
     };
   },
 )(PromoAutomation));

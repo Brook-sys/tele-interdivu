@@ -1,8 +1,8 @@
 import { addCallback } from '../../../lib/teact/teactn';
 
 import type { ApiNotification } from '../../../api/types';
-import type { LangCode } from '../../../types';
 import type { ActionReturnType, GlobalState } from '../../types';
+import { type LangCode, LeftColumnContent } from '../../../types';
 
 import { requestMutation } from '../../../lib/fasterdom/fasterdom';
 import { IS_ELECTRON, IS_MULTIACCOUNT_SUPPORTED, IS_TAURI } from '../../../util/browser/globalEnvironment';
@@ -38,6 +38,17 @@ import { selectSharedSettings } from '../../selectors/sharedState';
 import { destroySharedStatePort, initSharedState } from '../../shared/sharedStateConnector';
 
 const HISTORY_ANIMATION_DURATION = 450;
+
+async function checkIsAutomationRunning(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/v1/automation/status');
+    if (!res.ok) return false;
+    const data = await res.json();
+    return Boolean(data?.isRunning);
+  } catch {
+    return false;
+  }
+}
 
 setSystemThemeChangeCallback((theme) => {
   let global = getGlobal();
@@ -88,9 +99,19 @@ addActionHandler('switchMultitabRole', async (global, actions, payload): Promise
         };
         setGlobal(global);
       }
-      actions.initApi();
+
+      const isAutomationRunning = await checkIsAutomationRunning();
+      if (isAutomationRunning) {
+        actions.openLeftColumnContent({
+          contentKey: LeftColumnContent.PromoAutomation,
+          tabId: getCurrentTabId(),
+        });
+      } else {
+        actions.initApi();
+      }
     }
 
+    global = getGlobal();
     startWebsync();
     if (IS_MULTIACCOUNT_SUPPORTED) {
       initSharedState(global.sharedState);

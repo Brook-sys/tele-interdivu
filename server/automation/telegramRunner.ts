@@ -54,12 +54,36 @@ function getChatIdFromMtpPeer(peer: any): string {
   return '';
 }
 
+export function extractMessagesFromGramJsUpdate(update: any): any[] {
+  if (!update || typeof update !== 'object') return [];
+
+  if (Array.isArray(update.updates)) {
+    return update.updates.flatMap((u: any) => extractMessagesFromGramJsUpdate(u));
+  }
+
+  if (update.update) {
+    return extractMessagesFromGramJsUpdate(update.update);
+  }
+
+  if (update.message && typeof update.message === 'object') {
+    return [update.message];
+  }
+
+  if (update.chatId !== undefined && update.message !== undefined && typeof update.message === 'string') {
+    return [{
+      peerId: { chatId: update.chatId },
+      out: Boolean(update.out),
+      date: update.date || Math.floor(Date.now() / 1000),
+    }];
+  }
+
+  return [];
+}
+
 export class TelegramRunner {
   private client?: TelegramClient;
 
   private targetChatMap = new Map<string, TargetChatInfo>();
-
-  private isConnected = false;
 
   constructor(
     private readonly db: AutomationDatabase,
@@ -67,7 +91,7 @@ export class TelegramRunner {
   ) {}
 
   getIsConnected(): boolean {
-    return this.isConnected;
+    return Boolean(this.client?.isConnected());
   }
 
   async start(
@@ -113,11 +137,9 @@ export class TelegramRunner {
 
     await client.connect();
     this.client = client;
-    this.isConnected = true;
   }
 
   stop(): Promise<void> {
-    this.isConnected = false;
     if (this.client) {
       try {
         this.client.disconnect();
@@ -130,22 +152,76 @@ export class TelegramRunner {
   }
 
   private handleUpdate(update: any) {
-    const message = update?.message;
-    if (!message || !message.peerId) return;
+    if (!update) return;
 
     try {
-      const chatId = getChatIdFromMtpPeer(message.peerId);
-      if (!this.targetChatMap.has(chatId)) return;
+      const messages = extractMessagesFromGramJsUpdate(update);
+      for (const message of messages) {
+        if (!message || !message.peerId) continue;
 
-      if (message.out) {
-        // Message sent by our account in this group: reset other messages counter
-        this.db.resetGroupOtherMessages(chatId, message.date);
-      } else {
-        // Message sent by another member: increment other messages counter
-        this.db.incrementGroupOtherMessages(chatId);
+        const chatId = getChatIdFromMtpPeer(message.peerId);
+        if (!this.targetChatMap.has(chatId)) continue;
+
+        if (message.out) {
+          // Message sent by our account in this group: reset other messages counter
+          this.db.resetGroupOtherMessages(chatId, message.date || Math.floor(Date.now() / 1000));
+        } else {
+          // Message sent by another member: increment other messages counter
+          this.db.incrementGroupOtherMessages(chatId);
+        }
       }
     } catch {
       // Ignore update parsing errors
+    }
+  }
+
+  async checkOtherMessagesCount(
+    chatId: string,
+    minRequired: number,
+  ): Promise<number> {
+    if (!this.client || !this.client.isConnected()) {
+      return 0;
+    }
+
+    const chatInfo = this.targetChatMap.get(chatId);
+    if (!chatInfo) return 0;
+
+    const peer = buildInputPeerForChat(chatId, chatInfo.accessHash);
+    const groupState = this.db.getGroupState(chatId);
+    const lastSentAt = groupState?.lastSentAt;
+
+    try {
+      const history = await this.client.invoke(new GramJs.messages.GetHistory({
+        peer,
+        limit: Math.max(minRequired + 10, 20),
+        offsetId: 0,
+        offsetDate: 0,
+        addOffset: 0,
+        maxId: 0,
+        minId: 0,
+        hash: 0n,
+      })) as any;
+
+      const messages: any[] = history?.messages || [];
+      let count = 0;
+
+      for (const msg of messages) {
+        if (!msg || msg.className === 'MessageEmpty') continue;
+
+        if (msg.out) {
+          break;
+        }
+        if (lastSentAt && msg.date && msg.date <= lastSentAt) {
+          break;
+        }
+
+        count++;
+      }
+
+      this.db.setGroupOtherMessagesCount(chatId, count);
+      return count;
+    } catch {
+      return groupState?.otherMessagesCount || 0;
     }
   }
 
@@ -153,7 +229,7 @@ export class TelegramRunner {
     chatId: string,
     text: string,
   ): Promise<{ success: boolean; floodWaitSeconds?: number; error?: string }> {
-    if (!this.client || !this.isConnected) {
+    if (!this.client || !this.client.isConnected()) {
       return { success: false, error: 'Telegram runner is not connected' };
     }
 
@@ -195,6 +271,8 @@ export class TelegramRunner {
       if (err instanceof errors.SlowModeWaitError || /SLOWMODE_WAIT_(\d+)/.test(message)) {
         const match = message.match(/SLOWMODE_WAIT_(\d+)/);
         const seconds = match ? Number(match[1]) : (err.seconds || 60);
+        const serverNow = Math.floor(Date.now() / 1000);
+        this.db.setGroupSlowmode(chatId, seconds, serverNow + seconds);
         return { success: false, floodWaitSeconds: seconds, error: `Slowmode wait: ${seconds}s` };
       }
 

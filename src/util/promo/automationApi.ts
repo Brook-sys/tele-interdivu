@@ -1,12 +1,13 @@
 export interface AutomationStatusResponse {
   isRunning: boolean;
-  status: 'STOPPED' | 'RUNNING' | 'PAUSED' | 'SLEEP_WINDOW' | 'CIRCUIT_BREAKER' | 'MICRO_PAUSE';
+  status: 'STOPPED' | 'RUNNING' | 'PAUSED' | 'SLEEP_WINDOW' | 'CIRCUIT_BREAKER' | 'MICRO_PAUSE' | 'WAITING_NEXT_ROUND';
   isTelegramConnected: boolean;
   currentChatId?: string;
   currentChatTitle?: string;
   nextRunAt?: number;
   sleepUntil?: number;
   activeRound: number;
+  sentInRoundCount?: number;
   lastError?: string;
   stats: {
     todaySent: number;
@@ -88,7 +89,14 @@ export function fetchAutomationStatus(): Promise<AutomationStatusResponse> {
 
 export function startAutomationTakeover(payload: {
   sessionData: any;
-  targetChats: { id: string; title: string; accessHash?: string }[];
+  targetChats: {
+    id: string;
+    title: string;
+    accessHash?: string;
+    slowmodeSeconds?: number;
+    slowmodeNextSendDate?: number;
+    lastSentAt?: number;
+  }[];
 }): Promise<{ success: boolean; message: string }> {
   return request<{ success: boolean; message: string }>('takeover', {
     method: 'POST',

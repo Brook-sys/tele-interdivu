@@ -3,12 +3,13 @@ import type { AutomationDatabase, GroupStateRecord } from '../db/database';
 import { compileSpunMessage } from './spintax';
 
 export interface SchedulerState {
-  status: 'STOPPED' | 'RUNNING' | 'PAUSED' | 'SLEEP_WINDOW' | 'CIRCUIT_BREAKER' | 'MICRO_PAUSE';
+  status: 'STOPPED' | 'RUNNING' | 'PAUSED' | 'SLEEP_WINDOW' | 'CIRCUIT_BREAKER' | 'MICRO_PAUSE' | 'WAITING_NEXT_ROUND';
   currentChatId?: string;
   currentChatTitle?: string;
   nextRunAt?: number; // epoch ms
   sleepUntil?: number; // epoch ms
   activeRound: number;
+  sentInRoundCount: number;
   consecutiveFloodWaits: number;
   consecutiveSendsInRun: number;
   lastRunError?: string;
@@ -72,8 +73,8 @@ export function evaluateGroupEligibility(
     }
   }
 
-  // Check strict N other messages requirement
-  if (group.otherMessagesCount < minOtherMessages) {
+  // Strict N other messages requirement applies only once we have sent to this group previously
+  if (group.lastSentAt && group.otherMessagesCount < minOtherMessages) {
     return { isEligible: false, reason: 'WAITING_MESSAGES' };
   }
 
@@ -87,11 +88,13 @@ interface SendResult {
 }
 
 type SendCallback = (chatId: string, text: string, linkUsed: string) => Promise<SendResult>;
+type CheckMessagesCallback = (chatId: string, minRequired: number) => Promise<number>;
 
 export class AutomationScheduler {
   private state: SchedulerState = {
     status: 'STOPPED',
     activeRound: 0,
+    sentInRoundCount: 0,
     consecutiveFloodWaits: 0,
     consecutiveSendsInRun: 0,
   };
@@ -100,9 +103,12 @@ export class AutomationScheduler {
 
   private loopPromise?: Promise<void>;
 
+  private sentInRound = new Set<string>();
+
   constructor(
     private readonly db: AutomationDatabase,
     private readonly sendCallback: SendCallback,
+    private readonly checkMessagesCallback?: CheckMessagesCallback,
   ) {}
 
   getState(): Readonly<SchedulerState> {
@@ -116,6 +122,9 @@ export class AutomationScheduler {
     this.state.status = 'RUNNING';
     this.state.activeRound++;
     this.state.consecutiveSendsInRun = 0;
+    this.sentInRound.clear();
+    this.state.sentInRoundCount = 0;
+    this.state.lastRunError = undefined;
     this.loopPromise = this.runLoop(this.abortController.signal);
   }
 
@@ -125,10 +134,17 @@ export class AutomationScheduler {
     this.state.currentChatTitle = undefined;
     this.state.nextRunAt = undefined;
     this.state.sleepUntil = undefined;
+    this.sentInRound.clear();
+    this.state.sentInRoundCount = 0;
     if (this.abortController) {
       this.abortController.abort();
       this.abortController = undefined;
     }
+  }
+
+  resetRound() {
+    this.sentInRound.clear();
+    this.state.sentInRoundCount = 0;
   }
 
   private async sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -184,24 +200,72 @@ export class AutomationScheduler {
           continue;
         }
 
-        // 4. Find eligible group
+        // 4. Find eligible group in current round
         const allGroups = this.db.getAllGroupStates();
-        const eligibleGroup = allGroups.find((g) => {
-          const evalResult = evaluateGroupEligibility(g, config.minOtherMessages, serverNow);
-          return evalResult.isEligible;
-        });
+        const remainingInRound = allGroups.filter((g) => !this.sentInRound.has(g.chatId) && g.status !== 'BLOCKED');
 
-        if (!eligibleGroup) {
-          // If no groups are ready right now
+        if (remainingInRound.length === 0 && allGroups.length > 0) {
+          // All groups in this round were processed!
           if (config.mode === 'manual') {
-            // Manual round finished
             this.state.status = 'STOPPED';
+            const snippet = `Rodada manual #${this.state.activeRound} concluída `
+              + `(${this.sentInRound.size} grupos enviados).`;
+            this.db.addLog({
+              createdAt: serverNow,
+              chatId: 'system',
+              chatTitle: 'Sistema de Automação',
+              messageSnippet: snippet,
+              linkUsed: '',
+              status: 'SUCCESS',
+            });
             break;
           } else {
-            // Continuous loop: wait before checking again
-            await this.sleep(30_000, signal);
+            this.state.status = 'WAITING_NEXT_ROUND';
+            const snippet = `Rodada #${this.state.activeRound} concluída (${this.sentInRound.size} enviados). `
+              + `Próxima rodada em ${config.roundIntervalMinutes} minutos.`;
+            this.db.addLog({
+              createdAt: serverNow,
+              chatId: 'system',
+              chatTitle: 'Sistema de Automação',
+              messageSnippet: snippet,
+              linkUsed: '',
+              status: 'SUCCESS',
+            });
+            const pauseMs = Math.max(1, config.roundIntervalMinutes) * 60 * 1000;
+            await this.sleep(pauseMs, signal);
+            this.sentInRound.clear();
+            this.state.sentInRoundCount = 0;
+            this.state.activeRound++;
+            this.state.status = 'RUNNING';
             continue;
           }
+        }
+
+        // Look for the next ready group among remainingInRound
+        let eligibleGroup: GroupStateRecord | undefined;
+
+        for (const g of remainingInRound) {
+          let evalResult = evaluateGroupEligibility(g, config.minOtherMessages, serverNow);
+
+          // If waiting for messages and we have a checker callback, query Telegram history for fresh count
+          if (evalResult.reason === 'WAITING_MESSAGES' && this.checkMessagesCallback) {
+            const verifiedCount = await this.checkMessagesCallback(g.chatId, config.minOtherMessages);
+            if (verifiedCount >= config.minOtherMessages) {
+              evalResult = { isEligible: true, reason: 'READY' };
+            }
+          }
+
+          if (evalResult.isEligible) {
+            eligibleGroup = g;
+            break;
+          }
+        }
+
+        if (!eligibleGroup) {
+          // Groups exist in the round, but none are ready right now (slowmode or waiting for messages)
+          // Wait 15 seconds before checking again. Do not stop the round!
+          await this.sleep(15_000, signal);
+          continue;
         }
 
         // 5. Compile and send message
@@ -229,6 +293,8 @@ export class AutomationScheduler {
         if (sendResult.success) {
           this.state.consecutiveFloodWaits = 0;
           this.state.consecutiveSendsInRun++;
+          this.sentInRound.add(eligibleGroup.chatId);
+          this.state.sentInRoundCount = this.sentInRound.size;
           this.db.resetGroupOtherMessages(eligibleGroup.chatId, timestamp);
           this.db.addLog({
             createdAt: timestamp,

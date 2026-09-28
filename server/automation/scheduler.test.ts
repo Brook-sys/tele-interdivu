@@ -37,10 +37,11 @@ describe('calculateJitterDelayMs', () => {
 describe('evaluateGroupEligibility', () => {
   const now = 1_000_000;
 
-  it('declares group ready when conditions are met', () => {
+  it('declares group ready when conditions are met after previous send', () => {
     const result = evaluateGroupEligibility({
       chatId: '-1',
       title: 'Grupo A',
+      lastSentAt: now - 3600,
       otherMessagesCount: 5,
       slowmodeSeconds: 60,
       status: 'READY',
@@ -51,10 +52,26 @@ describe('evaluateGroupEligibility', () => {
     expect(result.reason).toBe('READY');
   });
 
-  it('blocks group waiting for other messages', () => {
+  it('allows sending for the first time if group has never been sent to', () => {
     const result = evaluateGroupEligibility({
       chatId: '-1',
       title: 'Grupo A',
+      lastSentAt: undefined, // never sent yet
+      otherMessagesCount: 0,
+      slowmodeSeconds: 60,
+      status: 'READY',
+      updatedAt: now,
+    }, 5, now);
+
+    expect(result.isEligible).toBe(true);
+    expect(result.reason).toBe('READY');
+  });
+
+  it('blocks group waiting for other messages when previously sent', () => {
+    const result = evaluateGroupEligibility({
+      chatId: '-1',
+      title: 'Grupo A',
+      lastSentAt: now - 3600,
       otherMessagesCount: 3, // less than 5
       slowmodeSeconds: 60,
       status: 'READY',
@@ -69,6 +86,7 @@ describe('evaluateGroupEligibility', () => {
     const result = evaluateGroupEligibility({
       chatId: '-1',
       title: 'Grupo A',
+      lastSentAt: now - 100,
       otherMessagesCount: 10,
       slowmodeSeconds: 600,
       slowmodeNextSendDate: now + 300,

@@ -313,6 +313,27 @@ export class AutomationDatabase {
     `).run(now, chatId);
   }
 
+  setGroupOtherMessagesCount(chatId: string, count: number) {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare(`
+      UPDATE group_state SET
+        other_messages_count = ?,
+        updated_at = ?
+      WHERE chat_id = ?
+    `).run(count, now, chatId);
+  }
+
+  setGroupSlowmode(chatId: string, slowmodeSeconds: number, slowmodeNextSendDate?: number) {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare(`
+      UPDATE group_state SET
+        slowmode_seconds = ?,
+        slowmode_next_send_date = ?,
+        updated_at = ?
+      WHERE chat_id = ?
+    `).run(slowmodeSeconds, slowmodeNextSendDate ?? null, now, chatId);
+  }
+
   resetGroupOtherMessages(chatId: string, lastSentAt: number) {
     const now = Math.floor(Date.now() / 1000);
     this.db.prepare(`

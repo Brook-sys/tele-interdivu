@@ -1,10 +1,10 @@
 import type http from 'node:http';
 import { URL } from 'node:url';
 
-import type { AutomationScheduler } from '../automation/scheduler';
 import type { TargetChatInfo, TelegramRunner } from '../automation/telegramRunner';
 import type { AutomationDatabase } from '../db/database';
 
+import { type AutomationScheduler, evaluateGroupEligibility } from '../automation/scheduler';
 import { compileSpunMessage, validateSpintaxSyntax } from '../automation/spintax';
 import { readJsonBody, sendError, sendJson } from './httpHelper';
 
@@ -45,18 +45,37 @@ export function createApiHandler(
         const todaySent = db.getTodaySentCount(serverNow);
         const groups = db.getAllGroupStates();
 
+        let readyCount = 0;
+        let waitingSlowmodeCount = 0;
+        let waitingMessagesCount = 0;
+        let blockedCount = 0;
+
+        for (const g of groups) {
+          const evalResult = evaluateGroupEligibility(g, config.minOtherMessages, serverNow);
+          if (evalResult.reason === 'READY') readyCount++;
+          else if (evalResult.reason === 'WAITING_SLOWMODE') waitingSlowmodeCount++;
+          else if (evalResult.reason === 'WAITING_MESSAGES') waitingMessagesCount++;
+          else if (evalResult.reason === 'BLOCKED') blockedCount++;
+        }
+
         const stats = {
           todaySent,
           dailyLimit: config.dailyLimit,
           totalGroups: groups.length,
-          readyCount: groups.filter((g) => g.status === 'READY').length,
-          waitingSlowmodeCount: groups.filter((g) => g.status === 'WAITING_SLOWMODE').length,
-          waitingMessagesCount: groups.filter((g) => g.status === 'WAITING_MESSAGES').length,
-          blockedCount: groups.filter((g) => g.status === 'BLOCKED').length,
+          readyCount,
+          waitingSlowmodeCount,
+          waitingMessagesCount,
+          blockedCount,
         };
 
+        const isRunning = schedulerState.status === 'RUNNING'
+          || schedulerState.status === 'WAITING_NEXT_ROUND'
+          || schedulerState.status === 'MICRO_PAUSE'
+          || schedulerState.status === 'SLEEP_WINDOW'
+          || schedulerState.status === 'CIRCUIT_BREAKER';
+
         sendJson(res, 200, {
-          isRunning: schedulerState.status === 'RUNNING',
+          isRunning,
           status: schedulerState.status,
           isTelegramConnected: runner.getIsConnected(),
           currentChatId: schedulerState.currentChatId,
@@ -64,6 +83,7 @@ export function createApiHandler(
           nextRunAt: schedulerState.nextRunAt,
           sleepUntil: schedulerState.sleepUntil,
           activeRound: schedulerState.activeRound,
+          sentInRoundCount: schedulerState.sentInRoundCount,
           lastError: schedulerState.lastRunError,
           stats,
           config,
@@ -76,7 +96,11 @@ export function createApiHandler(
       if (route === 'takeover' && method === 'POST') {
         const body = await readJsonBody<{
           sessionData: any;
-          targetChats: TargetChatInfo[];
+          targetChats: (TargetChatInfo & {
+            slowmodeSeconds?: number;
+            slowmodeNextSendDate?: number;
+            lastSentAt?: number;
+          })[];
         }>(req);
 
         if (!body.sessionData || !body.targetChats || !Array.isArray(body.targetChats)) {
@@ -90,12 +114,21 @@ export function createApiHandler(
         // Sync target groups in group_state
         body.targetChats.forEach((chat) => {
           const existing = db.getGroupState(chat.id);
+          const slowmodeSeconds = chat.slowmodeSeconds !== undefined
+            ? chat.slowmodeSeconds
+            : (existing?.slowmodeSeconds ?? 0);
+          const slowmodeNextSendDate = chat.slowmodeNextSendDate !== undefined
+            ? chat.slowmodeNextSendDate
+            : existing?.slowmodeNextSendDate;
+          const lastSentAt = chat.lastSentAt !== undefined ? chat.lastSentAt : existing?.lastSentAt;
+
           db.upsertGroupState({
             chatId: chat.id,
             title: chat.title,
             otherMessagesCount: existing ? existing.otherMessagesCount : 0,
-            slowmodeSeconds: existing ? existing.slowmodeSeconds : 0,
-            slowmodeNextSendDate: existing?.slowmodeNextSendDate,
+            slowmodeSeconds,
+            slowmodeNextSendDate,
+            lastSentAt,
             status: existing ? existing.status : 'READY',
           });
         });
@@ -154,7 +187,19 @@ export function createApiHandler(
 
       // 6. GET groups
       if (route === 'groups' && method === 'GET') {
-        sendJson(res, 200, db.getAllGroupStates());
+        const config = db.getConfig();
+        const serverNow = Math.floor(Date.now() / 1000);
+        const groups = db.getAllGroupStates();
+
+        const evaluatedGroups = groups.map((g) => {
+          const evalResult = evaluateGroupEligibility(g, config.minOtherMessages, serverNow);
+          return {
+            ...g,
+            status: evalResult.reason,
+          };
+        });
+
+        sendJson(res, 200, evaluatedGroups);
         return true;
       }
 
@@ -181,6 +226,13 @@ export function createApiHandler(
         }
 
         sendJson(res, 200, { previews });
+        return true;
+      }
+
+      // 9. POST reset-round
+      if (route === 'reset-round' && method === 'POST') {
+        scheduler.resetRound();
+        sendJson(res, 200, { success: true, message: 'Round counters reset' });
         return true;
       }
 
