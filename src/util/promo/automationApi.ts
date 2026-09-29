@@ -36,6 +36,7 @@ export interface AutomationStatusResponse {
     minDelaySeconds: number;
     maxDelaySeconds: number;
     roundIntervalMinutes: number;
+    roundTargetSends?: number;
     minOtherMessages: number;
     sleepWindowEnabled: boolean;
     sleepWindowStart: string;

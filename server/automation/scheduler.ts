@@ -122,8 +122,6 @@ export class AutomationScheduler {
 
   private loopPromise?: Promise<void>;
 
-  private sentInRound = new Set<string>();
-
   private sleepResolve?: () => void;
 
   constructor(
@@ -143,7 +141,6 @@ export class AutomationScheduler {
     this.state.status = 'RUNNING';
     this.state.activeRound++;
     this.state.consecutiveSendsInRun = 0;
-    this.sentInRound.clear();
     this.state.sentInRoundCount = 0;
     this.state.lastRunError = undefined;
     this.loopPromise = this.runLoop(this.abortController.signal);
@@ -155,7 +152,6 @@ export class AutomationScheduler {
     this.state.currentChatTitle = undefined;
     this.state.nextRunAt = undefined;
     this.state.sleepUntil = undefined;
-    this.sentInRound.clear();
     this.state.sentInRoundCount = 0;
     if (this.abortController) {
       this.abortController.abort();
@@ -164,12 +160,10 @@ export class AutomationScheduler {
   }
 
   resetRound() {
-    this.sentInRound.clear();
     this.state.sentInRoundCount = 0;
   }
 
   forceNewRound() {
-    this.sentInRound.clear();
     this.state.sentInRoundCount = 0;
     this.state.activeRound++;
     this.skipPause();
@@ -269,7 +263,44 @@ export class AutomationScheduler {
           }
         }
 
-        // 4. Find all valid groups (excluding blocked chats and chats that charge stars)
+        // 4. Round target check: conclude round when the send goal is reached
+        const roundTarget = Math.max(1, config.roundTargetSends);
+        if (this.state.sentInRoundCount >= roundTarget) {
+          const snippet = `Rodada #${this.state.activeRound} concluída: meta de `
+            + `${roundTarget} envios atingida.`;
+
+          if (config.mode === 'manual') {
+            this.state.status = 'STOPPED';
+            this.db.addLog({
+              createdAt: serverNow,
+              chatId: 'system',
+              chatTitle: 'Sistema de Automação',
+              messageSnippet: snippet,
+              linkUsed: '',
+              status: 'SUCCESS',
+            });
+            break;
+          }
+
+          this.state.status = 'WAITING_NEXT_ROUND';
+          this.db.addLog({
+            createdAt: serverNow,
+            chatId: 'system',
+            chatTitle: 'Sistema de Automação',
+            messageSnippet: `${snippet} Próxima rodada em ${config.roundIntervalMinutes} min.`,
+            linkUsed: '',
+            status: 'SUCCESS',
+          });
+
+          const pauseMs = Math.max(1, config.roundIntervalMinutes) * 60 * 1000;
+          await this.sleep(pauseMs, signal);
+          this.state.sentInRoundCount = 0;
+          this.state.activeRound++;
+          this.state.status = 'RUNNING';
+          continue;
+        }
+
+        // 5. Find all valid groups (excluding blocked chats and chats that charge stars)
         const allGroups = this.db.getAllGroupStates();
         const validGroups = allGroups.filter((g) => (
           g.status !== 'BLOCKED'
@@ -283,35 +314,14 @@ export class AutomationScheduler {
           break;
         }
 
-        // In manual mode, we send each group once per manual run
-        const candidateGroups = config.mode === 'manual'
-          ? validGroups.filter((g) => !this.sentInRound.has(g.chatId))
-          : validGroups;
-
-        if (config.mode === 'manual' && candidateGroups.length === 0) {
-          // Manual round completed!
-          this.state.status = 'STOPPED';
-          const snippet = `Rodada manual #${this.state.activeRound} concluída `
-            + `(${this.sentInRound.size} grupos enviados).`;
-          this.db.addLog({
-            createdAt: serverNow,
-            chatId: 'system',
-            chatTitle: 'Sistema de Automação',
-            messageSnippet: snippet,
-            linkUsed: '',
-            status: 'SUCCESS',
-          });
-          break;
-        }
-
-        // Evaluate eligibility for all candidate groups
+        // Evaluate eligibility for all valid groups
         const readyGroups: GroupStateRecord[] = [];
         let minSlowmodeWaitSeconds = Infinity;
         let slowestGroupTitle = '';
         let countWaitingSlowmode = 0;
         let countWaitingMessages = 0;
 
-        for (const g of candidateGroups) {
+        for (const g of validGroups) {
           let evalResult = evaluateGroupEligibility(
             g,
             config.minOtherMessages,
@@ -382,7 +392,7 @@ export class AutomationScheduler {
           continue;
         }
 
-        // 5. Compile and send message
+        // 6. Compile and send message
         const campaign = this.db.getCampaign();
         if (!campaign.spintaxTemplate) {
           this.state.lastRunError = 'No campaign template configured';
@@ -407,8 +417,7 @@ export class AutomationScheduler {
         if (sendResult.success) {
           this.state.consecutiveFloodWaits = 0;
           this.state.consecutiveSendsInRun++;
-          this.sentInRound.add(eligibleGroup.chatId);
-          this.state.sentInRoundCount = this.sentInRound.size;
+          this.state.sentInRoundCount++;
           this.db.resetGroupOtherMessages(eligibleGroup.chatId, timestamp);
           this.db.addLog({
             createdAt: timestamp,
@@ -419,8 +428,8 @@ export class AutomationScheduler {
             status: 'SUCCESS',
           });
         } else if (sendResult.isPaymentRequired) {
-          // Group requires Stars payment - exclude from round and do NOT pause queue
-          this.sentInRound.add(eligibleGroup.chatId);
+          // Group requires Stars payment - the runner already quarantined it in the DB.
+          // Just log the skip; the validGroups filter will exclude it from now on
           this.db.addLog({
             createdAt: timestamp,
             chatId: eligibleGroup.chatId,
@@ -467,7 +476,16 @@ export class AutomationScheduler {
           const isPermError = /CHAT_WRITE_FORBIDDEN|USER_BANNED_IN_CHANNEL|CHANNEL_PRIVATE|CHAT_RESTRICTED/
             .test(sendResult.error || '');
           if (isPermError) {
-            this.sentInRound.add(eligibleGroup.chatId);
+            this.db.upsertGroupState({
+              chatId: eligibleGroup.chatId,
+              title: eligibleGroup.title,
+              otherMessagesCount: eligibleGroup.otherMessagesCount,
+              slowmodeSeconds: eligibleGroup.slowmodeSeconds,
+              starsCost: eligibleGroup.starsCost,
+              lastSentAt: eligibleGroup.lastSentAt,
+              status: 'BLOCKED',
+              lastError: sendResult.error,
+            });
           }
           this.db.addLog({
             createdAt: timestamp,

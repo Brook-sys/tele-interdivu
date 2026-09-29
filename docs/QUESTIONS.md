@@ -240,3 +240,17 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     5 minutos por chat (`historyCheckCache`); updates do WebSocket já alimentam
     o contador em tempo real sem chamadas de rede. Ping periódico via `help.GetConfig`
     a cada 30 minutos previne desconexões silenciosas de MTProto no Node.js.
+
+45. **Contador de rodada travado em ~20 / rodada nunca concluía** — O progresso
+    da rodada era `sentInRound.size` (Set de chatIds únicos enviados). Como
+    grupos elegíveis podem ser reenviados livremente, o Set saturava no número
+    de grupos válidos únicos e o contador visualmente "travava" (ex.: 20/23);
+    adicionalmente, em modo `continuous` a rodada nunca era concluída porque
+    não existia meta de envios. Fix: (1) `sentInRoundCount` passou a ser um
+    contador inteiro incrementado a cada envio bem-sucedido, independente de
+    reenvio; (2) nova config `roundTargetSends` (padrão 23, migration
+    `ALTER TABLE config ADD COLUMN round_target_sends`) define a meta de
+    envios por rodada — ao atingi-la, o scheduler conclui a rodada (manual:
+    para; continuous: `WAITING_NEXT_ROUND` + espera `roundIntervalMinutes`
+    e reseta o contador); (3) painel mostra "Enviados na Rodada X / meta" e
+    o campo "Envios por rodada" ficou editável na aba de configurações.

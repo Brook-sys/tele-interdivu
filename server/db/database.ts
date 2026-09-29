@@ -10,6 +10,7 @@ export interface AutomationDbConfig {
   minDelaySeconds: number;
   maxDelaySeconds: number;
   roundIntervalMinutes: number;
+  roundTargetSends: number;
   minOtherMessages: number;
   sleepWindowEnabled: boolean;
   sleepWindowStart: string;
@@ -57,6 +58,7 @@ export const DEFAULT_CONFIG: AutomationDbConfig = {
   minDelaySeconds: 60,
   maxDelaySeconds: 180,
   roundIntervalMinutes: 120,
+  roundTargetSends: 23,
   minOtherMessages: 5,
   sleepWindowEnabled: true,
   sleepWindowStart: '23:30',
@@ -98,6 +100,7 @@ export class AutomationDatabase {
         min_delay_seconds INTEGER NOT NULL,
         max_delay_seconds INTEGER NOT NULL,
         round_interval_minutes INTEGER NOT NULL,
+        round_target_sends INTEGER NOT NULL DEFAULT 23,
         min_other_messages INTEGER NOT NULL,
         sleep_window_enabled INTEGER NOT NULL,
         sleep_window_start TEXT NOT NULL,
@@ -181,6 +184,12 @@ export class AutomationDatabase {
       // Column already exists
     }
 
+    try {
+      this.db.exec('ALTER TABLE config ADD COLUMN round_target_sends INTEGER NOT NULL DEFAULT 23');
+    } catch {
+      // Column already exists
+    }
+
     // Auto-quarantine any groups that previously failed with ALLOW_PAYMENT_REQUIRED
     try {
       this.db.exec(`
@@ -199,15 +208,16 @@ export class AutomationDatabase {
       this.db.prepare(`
         INSERT INTO config (
           id, mode, min_delay_seconds, max_delay_seconds, round_interval_minutes,
-          min_other_messages, sleep_window_enabled, sleep_window_start, sleep_window_end,
-          daily_limit, link_preview_enabled, micro_pause_enabled, micro_pause_every_min,
-          micro_pause_every_max, micro_pause_seconds
-        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          round_target_sends, min_other_messages, sleep_window_enabled, sleep_window_start,
+          sleep_window_end, daily_limit, link_preview_enabled, micro_pause_enabled,
+          micro_pause_every_min, micro_pause_every_max, micro_pause_seconds
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         DEFAULT_CONFIG.mode,
         DEFAULT_CONFIG.minDelaySeconds,
         DEFAULT_CONFIG.maxDelaySeconds,
         DEFAULT_CONFIG.roundIntervalMinutes,
+        DEFAULT_CONFIG.roundTargetSends,
         DEFAULT_CONFIG.minOtherMessages,
         DEFAULT_CONFIG.sleepWindowEnabled ? 1 : 0,
         DEFAULT_CONFIG.sleepWindowStart,
@@ -231,6 +241,7 @@ export class AutomationDatabase {
       minDelaySeconds: Number(row.min_delay_seconds),
       maxDelaySeconds: Number(row.max_delay_seconds),
       roundIntervalMinutes: Number(row.round_interval_minutes),
+      roundTargetSends: Number(row.round_target_sends ?? DEFAULT_CONFIG.roundTargetSends),
       minOtherMessages: Number(row.min_other_messages),
       sleepWindowEnabled: Boolean(row.sleep_window_enabled),
       sleepWindowStart: String(row.sleep_window_start),
@@ -255,6 +266,7 @@ export class AutomationDatabase {
         min_delay_seconds = ?,
         max_delay_seconds = ?,
         round_interval_minutes = ?,
+        round_target_sends = ?,
         min_other_messages = ?,
         sleep_window_enabled = ?,
         sleep_window_start = ?,
@@ -271,6 +283,7 @@ export class AutomationDatabase {
       next.minDelaySeconds,
       next.maxDelaySeconds,
       next.roundIntervalMinutes,
+      next.roundTargetSends,
       next.minOtherMessages,
       next.sleepWindowEnabled ? 1 : 0,
       next.sleepWindowStart,

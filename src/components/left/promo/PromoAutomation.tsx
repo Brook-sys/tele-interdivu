@@ -104,6 +104,7 @@ const PromoAutomation = ({
   const [minDelay, setMinDelay] = useState('60');
   const [maxDelay, setMaxDelay] = useState('180');
   const [roundInterval, setRoundInterval] = useState('120');
+  const [roundTargetSends, setRoundTargetSends] = useState('23');
   const [minOtherMsgs, setMinOtherMsgs] = useState('5');
   const [sleepEnabled, setSleepEnabled] = useState(true);
   const [sleepStart, setSleepStart] = useState('23:30');
@@ -146,6 +147,7 @@ const PromoAutomation = ({
           setMinDelay(String(res.config.minDelaySeconds ?? 60));
           setMaxDelay(String(res.config.maxDelaySeconds ?? 180));
           setRoundInterval(String(res.config.roundIntervalMinutes ?? 120));
+          setRoundTargetSends(String(res.config.roundTargetSends ?? 23));
           setMinOtherMsgs(String(res.config.minOtherMessages ?? 5));
           setSleepEnabled(Boolean(res.config.sleepWindowEnabled));
           setSleepStart(res.config.sleepWindowStart || '23:30');
@@ -348,6 +350,7 @@ const PromoAutomation = ({
         minDelaySeconds: Number(minDelay) || 60,
         maxDelaySeconds: Number(maxDelay) || 180,
         roundIntervalMinutes: Number(roundInterval) || 120,
+        roundTargetSends: Number(roundTargetSends) || 23,
         minOtherMessages: Number(minOtherMsgs) || 1,
         sleepWindowEnabled: sleepEnabled,
         sleepWindowStart: sleepStart,
@@ -468,7 +471,7 @@ const PromoAutomation = ({
           <div className={styles.statValue}>
             {statusData.sentInRoundCount || 0}
             {' / '}
-            {stats.totalGroups}
+            {statusData.config.roundTargetSends ?? 23}
           </div>
           <div className={styles.statLabel}>Enviados na Rodada</div>
         </div>
@@ -639,6 +642,13 @@ const PromoAutomation = ({
             onChange={(e) => setRoundInterval(e.target.value)}
           />
         )}
+
+        <InputText
+          label={lang('PromoAutomationRoundTargetSends')}
+          value={roundTargetSends}
+          inputMode="numeric"
+          onChange={(e) => setRoundTargetSends(e.target.value)}
+        />
 
         <InputText
           label={lang('PromoAutomationMinOtherMessages')}

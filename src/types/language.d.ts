@@ -2343,6 +2343,7 @@ export interface LangPair {
   'PromoAutomationMinDelay': undefined;
   'PromoAutomationMaxDelay': undefined;
   'PromoAutomationRoundInterval': undefined;
+  'PromoAutomationRoundTargetSends': undefined;
   'PromoAutomationMinOtherMessages': undefined;
   'PromoAutomationSleepWindowToggle': undefined;
   'PromoAutomationSleepStart': undefined;

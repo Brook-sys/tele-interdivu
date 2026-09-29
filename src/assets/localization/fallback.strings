@@ -3185,6 +3185,7 @@
 "PromoAutomationMinDelay" = "Atraso mínimo entre grupos (s)";
 "PromoAutomationMaxDelay" = "Atraso máximo entre grupos (s)";
 "PromoAutomationRoundInterval" = "Intervalo entre rodadas (minutos)";
+"PromoAutomationRoundTargetSends" = "Envios por rodada";
 "PromoAutomationMinOtherMessages" = "Mínimo de msgs de terceiros (estrito)";
 "PromoAutomationSleepWindowToggle" = "Ativar silêncio noturno";
 "PromoAutomationSleepStart" = "Início do silêncio";
