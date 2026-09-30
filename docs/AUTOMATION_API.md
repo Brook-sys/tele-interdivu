@@ -129,3 +129,40 @@ curl -s -X DELETE -H "$AUTH" $BASE/groups/-1001234567890
   channels).
 - With `AUTOMATION_API_TOKEN` enabled, the web UI needs the token once via URL
   (see Authentication).
+
+## Deploy / ops runbook
+
+### Stack webhook (Portainer)
+
+The `telegram-web-interface` stack webhook (redeploy + image re-pull):
+
+```
+POST https://100.83.108.127:9443/api/stacks/webhooks/0c56d8ff-40b1-4783-9f09-73961bb8d654
+```
+
+- **Tailscale DNS (`*.king-shade.ts.net`) does NOT resolve from the dev
+  machine** — `deb-containers.king-shade.ts.net` is host `100.83.108.127`;
+  call Portainer directly on port `9443` (HTTPS, self-signed: use `curl -k`)
+  or `9000` (HTTP). Port `443` is not listening.
+- The webhook UUID changes if the stack is recreated; fetch the current one
+  via the Portainer API (`GET /api/stacks`) — field `Webhook`.
+- Expected response: `HTTP 204`. Then verify out-of-band:
+  `GET http://100.83.108.127:8090/api/v1/automation/status` (check the new
+  config fields) — container restarts and daemon state resets to `STOPPED`.
+
+### After any container restart
+
+The scheduler state is in-memory: the automation comes back `STOPPED`.
+To resume remotely without the UI:
+
+```bash
+curl -X POST -H 'Content-Type: application/json' http://100.83.108.127:8090/api/v1/automation/takeover -d '{}'
+```
+
+(requires that a browser takeover happened at least once, so the session and
+target groups are saved).
+
+### Timezone
+
+The scheduler (sleep window) uses the container clock. `TZ` defaults to
+`America/Sao_Paulo` in `docker-compose.yml`; override via stack env `TZ`.
