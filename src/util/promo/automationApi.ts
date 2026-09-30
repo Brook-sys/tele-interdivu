@@ -38,6 +38,7 @@ export interface AutomationStatusResponse {
     roundIntervalMinutes: number;
     roundTargetSends?: number;
     minOtherMessages: number;
+    minResendIntervalMinutes?: number;
     sleepWindowEnabled: boolean;
     sleepWindowStart: string;
     sleepWindowEnd: string;

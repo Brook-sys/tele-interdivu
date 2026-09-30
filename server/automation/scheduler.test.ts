@@ -117,6 +117,54 @@ describe('evaluateGroupEligibility', () => {
     expect(result.reason).toBe('READY');
   });
 
+  it('blocks re-send within minResendIntervalMinutes even when other criteria are met', () => {
+    const result = evaluateGroupEligibility({
+      chatId: '-1',
+      title: 'Grupo A',
+      lastSentAt: now - 300, // 5 minutes ago
+      otherMessagesCount: 15,
+      slowmodeSeconds: 60,
+      starsCost: 0,
+      status: 'READY',
+      updatedAt: now,
+    }, 5, now, 10); // min 10 min between re-sends
+
+    expect(result.isEligible).toBe(false);
+    expect(result.reason).toBe('WAITING_RESEND');
+  });
+
+  it('allows re-send after minResendIntervalMinutes elapses', () => {
+    const result = evaluateGroupEligibility({
+      chatId: '-1',
+      title: 'Grupo A',
+      lastSentAt: now - 660, // 11 minutes ago
+      otherMessagesCount: 15,
+      slowmodeSeconds: 60,
+      starsCost: 0,
+      status: 'READY',
+      updatedAt: now,
+    }, 5, now, 10);
+
+    expect(result.isEligible).toBe(true);
+    expect(result.reason).toBe('READY');
+  });
+
+  it('disables resend floor when minResendIntervalMinutes is 0', () => {
+    const result = evaluateGroupEligibility({
+      chatId: '-1',
+      title: 'Grupo A',
+      lastSentAt: now - 70,
+      otherMessagesCount: 15,
+      slowmodeSeconds: 60,
+      starsCost: 0,
+      status: 'READY',
+      updatedAt: now,
+    }, 5, now, 0);
+
+    expect(result.isEligible).toBe(true);
+    expect(result.reason).toBe('READY');
+  });
+
   it('blocks group waiting for slowmode countdown', () => {
     const result = evaluateGroupEligibility({
       chatId: '-1',

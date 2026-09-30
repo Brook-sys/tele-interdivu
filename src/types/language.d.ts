@@ -2345,6 +2345,7 @@ export interface LangPair {
   'PromoAutomationRoundInterval': undefined;
   'PromoAutomationRoundTargetSends': undefined;
   'PromoAutomationMinOtherMessages': undefined;
+  'PromoAutomationMinResendInterval': undefined;
   'PromoAutomationSleepWindowToggle': undefined;
   'PromoAutomationSleepStart': undefined;
   'PromoAutomationSleepEnd': undefined;

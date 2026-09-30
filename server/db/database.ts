@@ -12,6 +12,7 @@ export interface AutomationDbConfig {
   roundIntervalMinutes: number;
   roundTargetSends: number;
   minOtherMessages: number;
+  minResendIntervalMinutes: number;
   sleepWindowEnabled: boolean;
   sleepWindowStart: string;
   sleepWindowEnd: string;
@@ -60,6 +61,7 @@ export const DEFAULT_CONFIG: AutomationDbConfig = {
   roundIntervalMinutes: 120,
   roundTargetSends: 23,
   minOtherMessages: 5,
+  minResendIntervalMinutes: 10,
   sleepWindowEnabled: true,
   sleepWindowStart: '23:30',
   sleepWindowEnd: '07:30',
@@ -102,6 +104,7 @@ export class AutomationDatabase {
         round_interval_minutes INTEGER NOT NULL,
         round_target_sends INTEGER NOT NULL DEFAULT 23,
         min_other_messages INTEGER NOT NULL,
+        min_resend_interval_minutes INTEGER NOT NULL DEFAULT 10,
         sleep_window_enabled INTEGER NOT NULL,
         sleep_window_start TEXT NOT NULL,
         sleep_window_end TEXT NOT NULL,
@@ -190,6 +193,12 @@ export class AutomationDatabase {
       // Column already exists
     }
 
+    try {
+      this.db.exec('ALTER TABLE config ADD COLUMN min_resend_interval_minutes INTEGER NOT NULL DEFAULT 10');
+    } catch {
+      // Column already exists
+    }
+
     // Auto-quarantine any groups that previously failed with ALLOW_PAYMENT_REQUIRED
     try {
       this.db.exec(`
@@ -243,6 +252,9 @@ export class AutomationDatabase {
       roundIntervalMinutes: Number(row.round_interval_minutes),
       roundTargetSends: Number(row.round_target_sends ?? DEFAULT_CONFIG.roundTargetSends),
       minOtherMessages: Number(row.min_other_messages),
+      minResendIntervalMinutes: Number(
+        row.min_resend_interval_minutes ?? DEFAULT_CONFIG.minResendIntervalMinutes,
+      ),
       sleepWindowEnabled: Boolean(row.sleep_window_enabled),
       sleepWindowStart: String(row.sleep_window_start),
       sleepWindowEnd: String(row.sleep_window_end),
@@ -268,6 +280,7 @@ export class AutomationDatabase {
         round_interval_minutes = ?,
         round_target_sends = ?,
         min_other_messages = ?,
+        min_resend_interval_minutes = ?,
         sleep_window_enabled = ?,
         sleep_window_start = ?,
         sleep_window_end = ?,
@@ -285,6 +298,7 @@ export class AutomationDatabase {
       next.roundIntervalMinutes,
       next.roundTargetSends,
       next.minOtherMessages,
+      next.minResendIntervalMinutes,
       next.sleepWindowEnabled ? 1 : 0,
       next.sleepWindowStart,
       next.sleepWindowEnd,

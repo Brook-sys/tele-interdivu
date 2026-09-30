@@ -106,6 +106,7 @@ const PromoAutomation = ({
   const [roundInterval, setRoundInterval] = useState('120');
   const [roundTargetSends, setRoundTargetSends] = useState('23');
   const [minOtherMsgs, setMinOtherMsgs] = useState('5');
+  const [minResendInterval, setMinResendInterval] = useState('10');
   const [sleepEnabled, setSleepEnabled] = useState(true);
   const [sleepStart, setSleepStart] = useState('23:30');
   const [sleepEnd, setSleepEnd] = useState('07:30');
@@ -149,6 +150,7 @@ const PromoAutomation = ({
           setRoundInterval(String(res.config.roundIntervalMinutes ?? 120));
           setRoundTargetSends(String(res.config.roundTargetSends ?? 23));
           setMinOtherMsgs(String(res.config.minOtherMessages ?? 5));
+          setMinResendInterval(String(res.config.minResendIntervalMinutes ?? 10));
           setSleepEnabled(Boolean(res.config.sleepWindowEnabled));
           setSleepStart(res.config.sleepWindowStart || '23:30');
           setSleepEnd(res.config.sleepWindowEnd || '07:30');
@@ -352,6 +354,7 @@ const PromoAutomation = ({
         roundIntervalMinutes: Number(roundInterval) || 120,
         roundTargetSends: Number(roundTargetSends) || 23,
         minOtherMessages: Number(minOtherMsgs) || 1,
+        minResendIntervalMinutes: Number(minResendInterval) || 0,
         sleepWindowEnabled: sleepEnabled,
         sleepWindowStart: sleepStart,
         sleepWindowEnd: sleepEnd,
@@ -481,7 +484,7 @@ const PromoAutomation = ({
             {' / '}
             {stats.dailyLimit}
           </div>
-          <div className={styles.statLabel}>Total Hoje</div>
+          <div className={styles.statLabel}>Últimas 24h</div>
         </div>
         <div className={styles.statCard}>
           <div className={styles.statValue}>{stats.readyCount}</div>
@@ -655,6 +658,13 @@ const PromoAutomation = ({
           value={minOtherMsgs}
           inputMode="numeric"
           onChange={(e) => setMinOtherMsgs(e.target.value)}
+        />
+
+        <InputText
+          label={lang('PromoAutomationMinResendInterval')}
+          value={minResendInterval}
+          inputMode="numeric"
+          onChange={(e) => setMinResendInterval(e.target.value)}
         />
 
         <InputText

@@ -52,10 +52,14 @@ export function createApiHandler(
         let starsCount = 0;
 
         for (const g of groups) {
-          const evalResult = evaluateGroupEligibility(g, config.minOtherMessages, serverNow);
+          const evalResult = evaluateGroupEligibility(
+            g, config.minOtherMessages, serverNow, config.minResendIntervalMinutes,
+          );
           if (evalResult.reason === 'READY') readyCount++;
-          else if (evalResult.reason === 'WAITING_SLOWMODE') waitingSlowmodeCount++;
-          else if (evalResult.reason === 'WAITING_MESSAGES') waitingMessagesCount++;
+          else if (evalResult.reason === 'WAITING_SLOWMODE'
+            || evalResult.reason === 'WAITING_RESEND') {
+            waitingSlowmodeCount++;
+          } else if (evalResult.reason === 'WAITING_MESSAGES') waitingMessagesCount++;
           else if (evalResult.reason === 'STARS') starsCount++;
           else if (evalResult.reason === 'BLOCKED') blockedCount++;
         }
@@ -213,7 +217,9 @@ export function createApiHandler(
         const groups = db.getAllGroupStates();
 
         const evaluatedGroups = groups.map((g) => {
-          const evalResult = evaluateGroupEligibility(g, config.minOtherMessages, serverNow);
+          const evalResult = evaluateGroupEligibility(
+            g, config.minOtherMessages, serverNow, config.minResendIntervalMinutes,
+          );
           return {
             ...g,
             status: evalResult.reason,
@@ -287,7 +293,9 @@ export function createApiHandler(
         const runnerStats = runner.getStats();
 
         const evaluatedGroups = groups.map((g) => {
-          const evalResult = evaluateGroupEligibility(g, config.minOtherMessages, serverNow);
+          const evalResult = evaluateGroupEligibility(
+            g, config.minOtherMessages, serverNow, config.minResendIntervalMinutes,
+          );
           const slowmodeRemaining = g.slowmodeNextSendDate && g.slowmodeNextSendDate > serverNow
             ? g.slowmodeNextSendDate - serverNow : 0;
           return {

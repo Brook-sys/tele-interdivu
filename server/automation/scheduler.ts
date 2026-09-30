@@ -1,4 +1,4 @@
-import type { AutomationDatabase, GroupStateRecord } from '../db/database';
+import type { AutomationDatabase, AutomationDbConfig, GroupStateRecord } from '../db/database';
 
 import { compileSpunMessage } from './spintax';
 
@@ -25,6 +25,7 @@ export interface SchedulerState {
   consecutiveSendsInRun: number;
   waitingReason?: string;
   lastRunError?: string;
+  wasInSleepWindow?: boolean;
 }
 
 export function isInsideSleepWindow(startStr: string, endStr: string, now = new Date()): boolean {
@@ -68,7 +69,10 @@ export function evaluateGroupEligibility(
   group: GroupStateRecord,
   minOtherMessages: number,
   serverNow: number,
-): { isEligible: boolean; reason: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' | 'STARS' } {
+  minResendIntervalMinutes = 0,
+): { isEligible: boolean;
+  reason: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'WAITING_RESEND' | 'BLOCKED' | 'STARS';
+} {
   if (group.status === 'BLOCKED') {
     return { isEligible: false, reason: 'BLOCKED' };
   }
@@ -86,6 +90,13 @@ export function evaluateGroupEligibility(
   if (group.lastSentAt && group.slowmodeSeconds > 0) {
     if (group.lastSentAt + group.slowmodeSeconds > serverNow) {
       return { isEligible: false, reason: 'WAITING_SLOWMODE' };
+    }
+  }
+
+  // 2b. Minimum wait between our own sends to the same group
+  if (minResendIntervalMinutes > 0 && group.lastSentAt) {
+    if (group.lastSentAt + minResendIntervalMinutes * 60 > serverNow) {
+      return { isEligible: false, reason: 'WAITING_RESEND' };
     }
   }
 
@@ -211,25 +222,93 @@ export class AutomationScheduler {
     });
   }
 
+  // Sleeps in 60s slices so long waits re-check the sleep window (and stay
+  // responsive to stop). Time spent inside the sleep window does not count
+  // toward the requested wait.
+  private async sleepWithWindowCheck(
+    ms: number,
+    config: Pick<AutomationDbConfig, 'sleepWindowEnabled' | 'sleepWindowStart' | 'sleepWindowEnd'>,
+    signal: AbortSignal,
+  ) {
+    let remainingMs = ms;
+    while (remainingMs > 0 && !signal.aborted) {
+      if (await this.enterSleepWindowIfActive(config, signal)) continue;
+      const chunkMs = Math.min(remainingMs, 60_000);
+      await this.sleep(chunkMs, signal);
+      remainingMs -= chunkMs;
+    }
+    this.exitSleepWindowIfFinished(config, signal);
+  }
+
+  // Returns true while inside the configured sleep window. Logs the
+  // transition once per entry.
+  private async enterSleepWindowIfActive(
+    config: Pick<AutomationDbConfig, 'sleepWindowEnabled' | 'sleepWindowStart' | 'sleepWindowEnd'>,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (!config.sleepWindowEnabled
+      || !isInsideSleepWindow(config.sleepWindowStart, config.sleepWindowEnd)) {
+      return false;
+    }
+
+    if (!this.state.wasInSleepWindow) {
+      this.state.wasInSleepWindow = true;
+      this.db.addLog({
+        createdAt: Math.floor(Date.now() / 1000),
+        chatId: 'system',
+        chatTitle: 'Sistema de Automação',
+        messageSnippet: `Janela de sono ativada (${config.sleepWindowStart}–${config.sleepWindowEnd}). `
+          + 'Envios pausados.',
+        linkUsed: '',
+        status: 'SKIPPED',
+      });
+    }
+
+    this.state.status = 'SLEEP_WINDOW';
+    await this.sleep(60_000, signal);
+    this.state.status = 'RUNNING';
+    return true;
+  }
+
+  private exitSleepWindowIfFinished(
+    config: Pick<AutomationDbConfig, 'sleepWindowEnabled' | 'sleepWindowStart' | 'sleepWindowEnd'>,
+    signal: AbortSignal,
+  ) {
+    if (!this.state.wasInSleepWindow || signal.aborted) return;
+    if (config.sleepWindowEnabled
+      && isInsideSleepWindow(config.sleepWindowStart, config.sleepWindowEnd)) {
+      return;
+    }
+
+    this.state.wasInSleepWindow = undefined;
+    this.db.addLog({
+      createdAt: Math.floor(Date.now() / 1000),
+      chatId: 'system',
+      chatTitle: 'Sistema de Automação',
+      messageSnippet: 'Janela de sono encerrada. Retomando envios.',
+      linkUsed: '',
+      status: 'SKIPPED',
+    });
+  }
+
   private async runLoop(signal: AbortSignal) {
     try {
       while (!signal.aborted && this.state.status === 'RUNNING') {
         const config = this.db.getConfig();
         const serverNow = Math.floor(Date.now() / 1000);
 
-        // 1. Sleep window check
-        if (config.sleepWindowEnabled && isInsideSleepWindow(config.sleepWindowStart, config.sleepWindowEnd)) {
-          this.state.status = 'SLEEP_WINDOW';
-          await this.sleep(60_000, signal);
-          this.state.status = 'RUNNING';
+        // 1. Sleep window check (re-evaluated at every loop iteration and
+        // inside long waits via sleepWithWindowCheck)
+        if (await this.enterSleepWindowIfActive(config, signal)) {
           continue;
         }
+        this.exitSleepWindowIfFinished(config, signal);
 
         // 2. Daily limit check
         const todaySent = this.db.getTodaySentCount(serverNow);
         if (todaySent >= config.dailyLimit) {
           this.state.lastRunError = `Daily limit reached (${todaySent}/${config.dailyLimit})`;
-          await this.sleep(300_000, signal);
+          await this.sleepWithWindowCheck(300_000, config, signal);
           continue;
         }
 
@@ -256,7 +335,7 @@ export class AutomationScheduler {
               status: 'SKIPPED',
             });
 
-            await this.sleep(pauseSec * 1000, signal);
+            await this.sleepWithWindowCheck(pauseSec * 1000, config, signal);
             this.state.consecutiveSendsInRun = 0;
             this.state.status = 'RUNNING';
             continue;
@@ -293,8 +372,9 @@ export class AutomationScheduler {
           });
 
           const pauseMs = Math.max(1, config.roundIntervalMinutes) * 60 * 1000;
-          await this.sleep(pauseMs, signal);
+          await this.sleepWithWindowCheck(pauseMs, config, signal);
           this.state.sentInRoundCount = 0;
+          this.state.consecutiveSendsInRun = 0;
           this.state.activeRound++;
           this.state.status = 'RUNNING';
           continue;
@@ -326,12 +406,18 @@ export class AutomationScheduler {
             g,
             config.minOtherMessages,
             serverNow,
+            config.minResendIntervalMinutes,
           );
 
-          if (evalResult.reason === 'WAITING_SLOWMODE') {
+          if (evalResult.reason === 'WAITING_SLOWMODE' || evalResult.reason === 'WAITING_RESEND') {
             countWaitingSlowmode++;
-            const remaining = g.slowmodeNextSendDate && g.slowmodeNextSendDate > serverNow
-              ? g.slowmodeNextSendDate - serverNow : (g.slowmodeSeconds || 60);
+            let remaining: number;
+            if (evalResult.reason === 'WAITING_RESEND') {
+              remaining = (g.lastSentAt || serverNow) + config.minResendIntervalMinutes * 60 - serverNow;
+            } else {
+              remaining = g.slowmodeNextSendDate && g.slowmodeNextSendDate > serverNow
+                ? g.slowmodeNextSendDate - serverNow : (g.slowmodeSeconds || 60);
+            }
             if (remaining < minSlowmodeWaitSeconds) {
               minSlowmodeWaitSeconds = remaining;
               slowestGroupTitle = g.title;
@@ -466,7 +552,7 @@ export class AutomationScheduler {
           if (this.state.consecutiveFloodWaits >= 2) {
             this.state.status = 'CIRCUIT_BREAKER';
             this.state.lastRunError = 'Triggered Circuit Breaker: 2 consecutive flood waits. Pausing 1h.';
-            await this.sleep(3600_000, signal);
+            await this.sleepWithWindowCheck(3600_000, config, signal);
             this.state.consecutiveFloodWaits = 0;
             this.state.status = 'RUNNING';
           } else {

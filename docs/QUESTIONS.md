@@ -254,3 +254,18 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     para; continuous: `WAITING_NEXT_ROUND` + espera `roundIntervalMinutes`
     e reseta o contador); (3) painel mostra "Enviados na Rodada X / meta" e
     o campo "Envios por rodada" ficou editável na aba de configurações.
+
+46. **Envios durante a janela de sono e reenvios rápidos no mesmo grupo** —
+    As esperas longas (intervalo de rodada, circuit breaker de 1h, recheck de
+    daily limit, micro-pausa) eram blocos únicos; a janela de sono só era
+    reavaliada no topo do loop, permitindo envios dentro da janela por até
+    30+ min. Adicionalmente, grupos hiperativos recebiam reenvios a cada
+    ~1-2 min porque bastavam N mensagens de terceiros chegarem rápido.
+    Fix: (1) `sleepWithWindowCheck` fatia esperas longas em blocos de 60s que
+    reavaliam a janela — tempo dentro da janela não conta para a espera e a
+    transição é registrada no histórico ("Janela de sono ativada/encerrada");
+    (2) nova config `minResendIntervalMinutes` (padrão 10 min, 0 desliga)
+    impõe piso mínimo entre reenvios ao mesmo grupo (razão `WAITING_RESEND`,
+    contabilizada como cooldown no painel); (3) `consecutiveSendsInRun` é
+    zerado ao concluir a rodada; (4) card do painel "Total Hoje" renomeado
+    para "Últimas 24h" para refletir a janela deslizante do contador.
