@@ -130,25 +130,21 @@ curl -s -X DELETE -H "$AUTH" $BASE/groups/-1001234567890
 - With `AUTOMATION_API_TOKEN` enabled, the web UI needs the token once via URL
   (see Authentication).
 
-## Deploy / ops runbook
+## Deploy / ops notes
 
-### Stack webhook (Portainer)
+### Stack redeploy webhook (Portainer)
 
-The `telegram-web-interface` stack webhook (redeploy + image re-pull):
+If the stack has a Portainer webhook configured, trigger a redeploy + image
+re-pull with:
 
 ```
-POST https://100.83.108.127:9443/api/stacks/webhooks/0c56d8ff-40b1-4783-9f09-73961bb8d654
+POST <portainer-url>/api/stacks/webhooks/<webhook-uuid>
 ```
 
-- **Tailscale DNS (`*.king-shade.ts.net`) does NOT resolve from the dev
-  machine** — `deb-containers.king-shade.ts.net` is host `100.83.108.127`;
-  call Portainer directly on port `9443` (HTTPS, self-signed: use `curl -k`)
-  or `9000` (HTTP). Port `443` is not listening.
-- The webhook UUID changes if the stack is recreated; fetch the current one
-  via the Portainer API (`GET /api/stacks`) — field `Webhook`.
-- Expected response: `HTTP 204`. Then verify out-of-band:
-  `GET http://100.83.108.127:8090/api/v1/automation/status` (check the new
-  config fields) — container restarts and daemon state resets to `STOPPED`.
+The webhook UUID is shown in the stack settings in the Portainer UI (or via
+`GET /api/stacks`, field `Webhook`). Expected response: `HTTP 204`.
+Then verify out-of-band with `GET /api/v1/automation/status` — a redeploy
+restarts the container and the daemon state resets to `STOPPED`.
 
 ### After any container restart
 
@@ -156,7 +152,7 @@ The scheduler state is in-memory: the automation comes back `STOPPED`.
 To resume remotely without the UI:
 
 ```bash
-curl -X POST -H 'Content-Type: application/json' http://100.83.108.127:8090/api/v1/automation/takeover -d '{}'
+curl -X POST -H 'Content-Type: application/json' $BASE/takeover -d '{}'
 ```
 
 (requires that a browser takeover happened at least once, so the session and
@@ -166,3 +162,4 @@ target groups are saved).
 
 The scheduler (sleep window) uses the container clock. `TZ` defaults to
 `America/Sao_Paulo` in `docker-compose.yml`; override via stack env `TZ`.
+
