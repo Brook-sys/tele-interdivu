@@ -12,6 +12,8 @@ services:
     container_name: telegram-promo
     restart: unless-stopped
     environment:
+      # Timezone used by the scheduler (sleep window, reset of daily counters)
+      TZ: ${TZ:-America/Sao_Paulo}
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:?Set TELEGRAM_API_ID in .env}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?Set TELEGRAM_API_HASH in .env}
       # Dedicated proxy for multi-account isolation (supports socks5:// or http://)
