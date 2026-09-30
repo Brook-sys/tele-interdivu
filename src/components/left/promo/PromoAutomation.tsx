@@ -213,11 +213,6 @@ const PromoAutomation = ({
           const status = promoStatusById[id];
           const classification = classifyPromoChat(chat, fullInfo, status, serverNow);
 
-          // Never target chats that are blocked or require Stars payment
-          if (classification === 'blocked' || classification === 'stars') {
-            return undefined;
-          }
-
           const slowmodeRemaining = getSlowmodeRemainingSeconds(fullInfo, status, serverNow);
           const slowmodeSeconds = fullInfo?.slowMode?.seconds || 0;
           const slowmodeNextSendDate = slowmodeRemaining > 0 ? (serverNow + slowmodeRemaining) : undefined;
@@ -229,16 +224,18 @@ const PromoAutomation = ({
             slowmodeSeconds,
             slowmodeNextSendDate,
             lastSentAt: status?.lastOwnMessageAt,
-            starsCost: chat.paidMessagesStars || 0,
-            status: slowmodeRemaining > 0 ? ('WAITING_SLOWMODE' as const) : ('READY' as const),
+            starsCost: classification === 'stars' ? (chat.paidMessagesStars || 0) : 0,
+            status: classification === 'blocked' ? ('BLOCKED' as const)
+              : classification === 'stars' ? ('STARS' as const)
+                : slowmodeRemaining > 0 ? ('WAITING_SLOWMODE' as const) : ('READY' as const),
           };
         })
         .filter((c): c is NonNullable<typeof c> => Boolean(c));
 
       if (!targetChats.length) {
         throw new Error(
-          'Nenhum grupo livre para envio na pasta selecionada '
-          + '(grupos que cobram estrelas ou bloqueados são ignorados).',
+          'A pasta selecionada não contém grupos. '
+          + 'Grupos que cobram estrelas ou bloqueados ficam em quarentena e são revalidados automaticamente.',
         );
       }
 

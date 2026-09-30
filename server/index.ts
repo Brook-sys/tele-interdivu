@@ -17,6 +17,7 @@ const scheduler = new AutomationScheduler(
   db,
   (chatId, text) => runner.sendMessage(chatId, text),
   (chatId, minRequired) => runner.checkOtherMessagesCount(chatId, minRequired),
+  (chatId) => runner.probeChat(chatId),
 );
 
 const apiHandler = createApiHandler(db, runner, scheduler);

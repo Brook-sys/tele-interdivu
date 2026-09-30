@@ -269,3 +269,19 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     contabilizada como cooldown no painel); (3) `consecutiveSendsInRun` é
     zerado ao concluir a rodada; (4) card do painel "Total Hoje" renomeado
     para "Últimas 24h" para refletir a janela deslizante do contador.
+
+47. **Grupos em quarentena nunca eram reavaliados; reenvios rápidos no mesmo grupo**
+    — Grupos marcados `STARS`/`BLOCKED` eram excluídos pela UI no takeover e
+    sumiam do `group_state` no próximo `syncTargetGroups`, então um grupo que
+    parasse de cobrar estrelas só voltava após restart manual. Logs mostraram
+    o mesmo grupo recebendo 4 envios em 2 min (grupos hiperativos satisfazem
+    o mínimo de mensagens de terceiros quase instantaneamente). Fix: (1) a UI
+    não exclui mais grupos estrelas/bloqueados do takeover — eles entram no
+    `group_state` quarentenados; (2) o runner expõe `probeChat` (read-only via
+    `channels.GetFullChannel`/`messages.GetFullChat`) e o scheduler revalida
+    um lote de até 3 quarentenados a cada 30 min (`revalidateQuarantinedGroups`),
+    reintegrando como `READY` quem ficou livre e atualizando preço/status dos
+    demais, com log da transição; (3) a priorização por `lastSentAt` mais
+    antigo já existia no sort de `readyGroups` — combinada com o piso de
+    `minResendIntervalMinutes`, o mesmo grupo não é reenviado antes do
+    intervalo mesmo tendo mensagens suficientes.

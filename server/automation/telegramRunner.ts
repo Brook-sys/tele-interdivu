@@ -12,6 +12,12 @@ export interface TargetChatInfo {
   accessHash?: string;
 }
 
+export interface ChatProbeResult {
+  canWrite: boolean;
+  starsCost?: number;
+  slowmodeSeconds?: number;
+}
+
 const CHANNEL_ID_BASE = 1000000000000n;
 
 function buildInputPeerForChat(chatId: string, accessHash?: string): GramJs.TypeInputPeer {
@@ -281,6 +287,55 @@ export class TelegramRunner {
       return count;
     } catch {
       return localCount;
+    }
+  }
+
+  // Read-only probe used to revalidate quarantined groups (stars/blocked)
+  // without sending anything. Returns undefined on transient failures so the
+  // scheduler retries on the next cycle.
+  async probeChat(chatId: string): Promise<ChatProbeResult | undefined> {
+    if (!this.client || !this.client.isConnected()) return undefined;
+
+    const chatInfo = this.targetChatMap.get(chatId);
+    if (!chatInfo) return undefined;
+
+    try {
+      if (chatId.startsWith('-100')) {
+        const n = BigInt(chatId);
+        const channel = new GramJs.InputChannel({
+          channelId: -n - CHANNEL_ID_BASE,
+          accessHash: chatInfo.accessHash ? BigInt(chatInfo.accessHash) : 0n,
+        });
+        const result = await this.client.invoke(
+          new GramJs.channels.GetFullChannel({ channel }),
+        ) as any;
+        const fullChat = result?.fullChat;
+
+        return {
+          canWrite: true,
+          starsCost: Number(fullChat?.sendPaidMessagesStars || 0),
+          slowmodeSeconds: Number(fullChat?.slowmodeSeconds || 0),
+        };
+      }
+
+      const result = await this.client.invoke(new GramJs.messages.GetFullChat({
+        chatId: -BigInt(chatId),
+      })) as any;
+
+      return {
+        canWrite: true,
+        starsCost: 0,
+        slowmodeSeconds: Number(result?.fullChat?.slowmodeSeconds || 0),
+      };
+    } catch (err: any) {
+      const message = String(err?.errorMessage || err?.message || err);
+      const isInaccessible = /CHANNEL_PRIVATE|CHAT_WRITE_FORBIDDEN|USER_BANNED_IN_CHANNEL/
+        .test(message) || /CHAT_RESTRICTED|USER_NOT_PARTICIPANT/.test(message);
+      if (isInaccessible) {
+        return { canWrite: false };
+      }
+
+      return undefined;
     }
   }
 

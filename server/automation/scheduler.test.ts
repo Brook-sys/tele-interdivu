@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  AutomationScheduler,
   calculateJitterDelayMs,
   evaluateGroupEligibility,
   isInsideSleepWindow,
@@ -223,5 +224,87 @@ describe('evaluateGroupEligibility', () => {
 
     expect(result.isEligible).toBe(false);
     expect(result.reason).toBe('BLOCKED');
+  });
+});
+
+describe('quarantine revalidation', () => {
+  function createDbStub(groups: any[]) {
+    const upserts: any[] = [];
+    const logs: any[] = [];
+    const db = {
+      getAllGroupStates: () => groups,
+      upsertGroupState: (r: any) => upserts.push(r),
+      addLog: (l: any) => logs.push(l),
+    };
+
+    return { db, upserts, logs };
+  }
+
+  function createScheduler(db: any, probe: (chatId: string) => Promise<any>) {
+    return new AutomationScheduler(db, () => Promise.resolve({ success: true }), undefined, probe);
+  }
+
+  it('reintegrates a stars group when the probe reports it is free again', async () => {
+    const group = {
+      chatId: '-1', title: 'Grupo Estrelas', otherMessagesCount: 3, slowmodeSeconds: 60,
+      starsCost: 20, status: 'STARS', lastSentAt: 1, updatedAt: 1,
+    };
+    const { db, upserts } = createDbStub([group]);
+    const scheduler = createScheduler(db, () => Promise.resolve({ canWrite: true, starsCost: 0, slowmodeSeconds: 30 }));
+
+    await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
+
+    expect(upserts).toHaveLength(1);
+    expect(upserts[0].status).toBe('READY');
+    expect(upserts[0].starsCost).toBe(0);
+    expect(upserts[0].slowmodeSeconds).toBe(30);
+  });
+
+  it('marks a stars group as blocked when the probe says the channel is inaccessible', async () => {
+    const group = {
+      chatId: '-2', title: 'Grupo X', otherMessagesCount: 0, slowmodeSeconds: 0,
+      starsCost: 50, status: 'STARS', updatedAt: 1,
+    };
+    const { db, upserts } = createDbStub([group]);
+    const scheduler = createScheduler(db, () => Promise.resolve({ canWrite: false }));
+
+    await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
+
+    expect(upserts).toHaveLength(1);
+    expect(upserts[0].status).toBe('BLOCKED');
+  });
+
+  it('updates the stars price and keeps quarantine when the group still charges', async () => {
+    const group = {
+      chatId: '-3', title: 'Grupo Y', otherMessagesCount: 0, slowmodeSeconds: 0,
+      starsCost: 10, status: 'STARS', updatedAt: 1,
+    };
+    const { db, upserts } = createDbStub([group]);
+    let calls = 0;
+    const scheduler = createScheduler(db, async () => {
+      calls++;
+      await Promise.resolve();
+      return { canWrite: true, starsCost: 99 };
+    });
+
+    await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
+    await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
+
+    expect(calls).toBe(1); // throttled by REVALIDATE_INTERVAL_MS
+    expect(upserts[0].status).toBe('STARS');
+    expect(upserts[0].starsCost).toBe(99);
+  });
+
+  it('skips revalidation when probe callback is unavailable', async () => {
+    const group = {
+      chatId: '-4', title: 'Grupo Z', otherMessagesCount: 0, slowmodeSeconds: 0,
+      starsCost: 5, status: 'STARS', updatedAt: 1,
+    };
+    const { db, upserts } = createDbStub([group]);
+    const scheduler = new AutomationScheduler(db as any, () => Promise.resolve({ success: true }));
+
+    await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
+
+    expect(upserts).toHaveLength(0);
   });
 });

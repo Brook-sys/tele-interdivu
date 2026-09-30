@@ -1,4 +1,5 @@
 import type { AutomationDatabase, AutomationDbConfig, GroupStateRecord } from '../db/database';
+import type { ChatProbeResult } from './telegramRunner';
 
 import { compileSpunMessage } from './spintax';
 
@@ -119,6 +120,10 @@ interface SendResult {
 
 type SendCallback = (chatId: string, text: string, linkUsed: string) => Promise<SendResult>;
 type CheckMessagesCallback = (chatId: string, minRequired: number) => Promise<number>;
+type ProbeChatCallback = (chatId: string) => Promise<ChatProbeResult | undefined>;
+
+const REVALIDATE_INTERVAL_MS = 30 * 60_000;
+const REVALIDATE_BATCH_SIZE = 3;
 
 export class AutomationScheduler {
   private state: SchedulerState = {
@@ -139,7 +144,10 @@ export class AutomationScheduler {
     private readonly db: AutomationDatabase,
     private readonly sendCallback: SendCallback,
     private readonly checkMessagesCallback?: CheckMessagesCallback,
+    private readonly probeChatCallback?: ProbeChatCallback,
   ) {}
+
+  private lastRevalidateAt = 0;
 
   getState(): Readonly<SchedulerState> {
     return { ...this.state };
@@ -291,6 +299,86 @@ export class AutomationScheduler {
     });
   }
 
+  // Periodically probes quarantined groups (STARS/BLOCKED) with read-only
+  // API calls and reintegrates the ones that became free again.
+  private async revalidateQuarantinedGroups(signal: AbortSignal) {
+    if (!this.probeChatCallback) return;
+
+    const now = Date.now();
+    if (now - this.lastRevalidateAt < REVALIDATE_INTERVAL_MS) return;
+    this.lastRevalidateAt = now;
+
+    const quarantined = this.db.getAllGroupStates()
+      .filter((g) => g.status === 'STARS' || g.status === 'BLOCKED')
+      .sort((a, b) => a.updatedAt - b.updatedAt)
+      .slice(0, REVALIDATE_BATCH_SIZE);
+
+    for (const g of quarantined) {
+      if (signal.aborted) return;
+
+      const probe = await this.probeChatCallback(g.chatId);
+      if (!probe) continue;
+
+      const serverNow = Math.floor(Date.now() / 1000);
+
+      if (!probe.canWrite) {
+        if (g.status !== 'BLOCKED') {
+          this.db.upsertGroupState({
+            chatId: g.chatId,
+            title: g.title,
+            otherMessagesCount: g.otherMessagesCount,
+            slowmodeSeconds: g.slowmodeSeconds,
+            slowmodeNextSendDate: g.slowmodeNextSendDate,
+            starsCost: g.starsCost,
+            lastSentAt: g.lastSentAt,
+            status: 'BLOCKED',
+            lastError: 'Canal inacessível na revalidação',
+          });
+        }
+        continue;
+      }
+
+      const starsCost = probe.starsCost || 0;
+      if (starsCost > 0) {
+        if (g.status !== 'STARS' || g.starsCost !== starsCost) {
+          this.db.upsertGroupState({
+            chatId: g.chatId,
+            title: g.title,
+            otherMessagesCount: g.otherMessagesCount,
+            slowmodeSeconds: g.slowmodeSeconds,
+            slowmodeNextSendDate: g.slowmodeNextSendDate,
+            starsCost,
+            lastSentAt: g.lastSentAt,
+            status: 'STARS',
+            lastError: undefined,
+          });
+        }
+        continue;
+      }
+
+      // Free again: reintegrate into the queue
+      this.db.upsertGroupState({
+        chatId: g.chatId,
+        title: g.title,
+        otherMessagesCount: g.otherMessagesCount,
+        slowmodeSeconds: probe.slowmodeSeconds !== undefined ? probe.slowmodeSeconds : g.slowmodeSeconds,
+        slowmodeNextSendDate: g.slowmodeNextSendDate,
+        starsCost: 0,
+        lastSentAt: g.lastSentAt,
+        status: 'READY',
+        lastError: undefined,
+      });
+      this.db.addLog({
+        createdAt: serverNow,
+        chatId: g.chatId,
+        chatTitle: g.title,
+        messageSnippet: `Grupo "${g.title}" deixou de cobrar estrelas/bloquear e foi reintegrado à fila.`,
+        linkUsed: '',
+        status: 'SKIPPED',
+      });
+    }
+  }
+
   private async runLoop(signal: AbortSignal) {
     try {
       while (!signal.aborted && this.state.status === 'RUNNING') {
@@ -303,6 +391,10 @@ export class AutomationScheduler {
           continue;
         }
         this.exitSleepWindowIfFinished(config, signal);
+
+        // 1b. Quarantined groups (stars/blocked) may become free again:
+        // re-probe a small batch periodically without sending anything
+        await this.revalidateQuarantinedGroups(signal);
 
         // 2. Daily limit check
         const todaySent = this.db.getTodaySentCount(serverNow);
