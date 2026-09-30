@@ -285,3 +285,16 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     antigo já existia no sort de `readyGroups` — combinada com o piso de
     `minResendIntervalMinutes`, o mesmo grupo não é reenviado antes do
     intervalo mesmo tendo mensagens suficientes.
+
+48. **Controle remoto completo da automação via API** — O daemon já expunha
+    status/config/campaign/logs, mas só o browser conseguia iniciar a
+    automação (o takeover exigia `sessionData` e `targetChats` vivos da UI,
+    e o `group_state` não guardava `accessHash`). Fix: (1) `group_state`
+    passou a persistir `access_hash` (migration), nunca exposto nos GETs;
+    (2) o takeover aceita corpo vazio `{}` e reusa sessão + grupos salvos
+    (`usedSavedSession` na resposta), permitindo start 100% remoto;
+    (3) novos endpoints `POST/DELETE /groups/{chatId}` para adicionar,
+    quarentenar, reintegrar ou remover grupos sem abrir o painel;
+    (4) auth opcional por `AUTOMATION_API_TOKEN` (Bearer) — o painel lê o
+    token uma vez de `?automationToken=` na URL e persiste em localStorage.
+    Referência completa em `docs/AUTOMATION_API.md`.

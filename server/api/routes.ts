@@ -22,8 +22,8 @@ export function createApiHandler(
     if (method === 'OPTIONS') {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
       });
       res.end();
       return true;
@@ -31,6 +31,15 @@ export function createApiHandler(
 
     if (!pathname.startsWith('/api/v1/automation/')) {
       return false;
+    }
+
+    // Optional bearer token: when AUTOMATION_API_TOKEN is set, every API
+    // consumer (including the web UI, which sends it via Authorization after
+    // reading ?automationToken= from the URL once) must authenticate.
+    const apiToken = process.env.AUTOMATION_API_TOKEN;
+    if (apiToken && req.headers.authorization !== `Bearer ${apiToken}`) {
+      sendError(res, 401, 'Unauthorized: provide "Authorization: Bearer <AUTOMATION_API_TOKEN>"');
+      return true;
     }
 
     const route = pathname.replace('/api/v1/automation/', '');
@@ -109,10 +118,13 @@ export function createApiHandler(
       }
 
       // 2. POST takeover (Frontend hands over session and targets to daemon)
+      // Remote start: sessionData and targetChats are optional — when omitted,
+      // the daemon reuses the saved session and the group_state table as
+      // targets, so the automation can be restarted purely via the API.
       if (route === 'takeover' && method === 'POST') {
         const body = await readJsonBody<{
-          sessionData: any;
-          targetChats: (TargetChatInfo & {
+          sessionData?: any;
+          targetChats?: (TargetChatInfo & {
             slowmodeSeconds?: number;
             slowmodeNextSendDate?: number;
             lastSentAt?: number;
@@ -121,50 +133,78 @@ export function createApiHandler(
           })[];
         }>(req);
 
-        if (!body.sessionData || !body.targetChats || !Array.isArray(body.targetChats)) {
-          sendError(res, 400, 'Missing sessionData or targetChats array');
-          return true;
+        let sessionData = body.sessionData;
+        if (!sessionData) {
+          const savedSession = db.getSession();
+          if (!savedSession) {
+            sendError(res, 400, 'No sessionData provided and no saved session found — start from the web UI first');
+            return true;
+          }
+          try {
+            sessionData = JSON.parse(savedSession);
+          } catch {
+            sendError(res, 500, 'Saved session is corrupted — start from the web UI again');
+            return true;
+          }
+        } else {
+          db.saveSession(JSON.stringify(sessionData));
         }
 
-        // Save session to SQLite for persistence
-        db.saveSession(JSON.stringify(body.sessionData));
+        let targetChats = body.targetChats;
+        if (!targetChats || !Array.isArray(targetChats) || targetChats.length === 0) {
+          targetChats = db.getAllGroupStates().map((g) => ({
+            id: g.chatId,
+            title: g.title,
+            accessHash: g.accessHash,
+          }));
+          if (!targetChats.length) {
+            sendError(res, 400, 'No targetChats provided and no groups saved — start from the web UI first');
+            return true;
+          }
+        } else {
+          // Sync target groups in group_state — removes any old/deleted chats
+          const validChatIds = targetChats.map((c) => c.id);
+          db.syncTargetGroups(validChatIds);
 
-        // Sync target groups in group_state — removes any old/deleted chats
-        const validChatIds = body.targetChats.map((c) => c.id);
-        db.syncTargetGroups(validChatIds);
+          targetChats.forEach((chat) => {
+            const existing = db.getGroupState(chat.id);
+            const slowmodeSeconds = chat.slowmodeSeconds !== undefined
+              ? chat.slowmodeSeconds
+              : (existing?.slowmodeSeconds ?? 0);
+            const slowmodeNextSendDate = chat.slowmodeNextSendDate !== undefined
+              ? chat.slowmodeNextSendDate
+              : existing?.slowmodeNextSendDate;
+            const lastSentAt = chat.lastSentAt !== undefined ? chat.lastSentAt : existing?.lastSentAt;
+            const starsCost = chat.starsCost !== undefined ? chat.starsCost : (existing?.starsCost ?? 0);
+            const status = (starsCost > 0 || chat.status === 'STARS')
+              ? 'STARS'
+              : (chat.status || (existing?.status ?? 'READY'));
 
-        body.targetChats.forEach((chat) => {
-          const existing = db.getGroupState(chat.id);
-          const slowmodeSeconds = chat.slowmodeSeconds !== undefined
-            ? chat.slowmodeSeconds
-            : (existing?.slowmodeSeconds ?? 0);
-          const slowmodeNextSendDate = chat.slowmodeNextSendDate !== undefined
-            ? chat.slowmodeNextSendDate
-            : existing?.slowmodeNextSendDate;
-          const lastSentAt = chat.lastSentAt !== undefined ? chat.lastSentAt : existing?.lastSentAt;
-          const starsCost = chat.starsCost !== undefined ? chat.starsCost : (existing?.starsCost ?? 0);
-          const status = (starsCost > 0 || chat.status === 'STARS')
-            ? 'STARS'
-            : (chat.status || (existing?.status ?? 'READY'));
-
-          db.upsertGroupState({
-            chatId: chat.id,
-            title: chat.title,
-            otherMessagesCount: existing ? existing.otherMessagesCount : 0,
-            slowmodeSeconds,
-            slowmodeNextSendDate,
-            starsCost,
-            lastSentAt,
-            status,
+            db.upsertGroupState({
+              chatId: chat.id,
+              title: chat.title,
+              accessHash: chat.accessHash,
+              otherMessagesCount: existing ? existing.otherMessagesCount : 0,
+              slowmodeSeconds,
+              slowmodeNextSendDate,
+              starsCost,
+              lastSentAt,
+              status,
+            });
           });
-        });
+        }
 
         // Restart runner and scheduler cleanly
         scheduler.stop();
-        await runner.start(body.sessionData, body.targetChats);
+        await runner.start(sessionData, targetChats);
         scheduler.start();
 
-        sendJson(res, 200, { success: true, message: 'Automation takeover successful' });
+        sendJson(res, 200, {
+          success: true,
+          message: 'Automation takeover successful',
+          groupsCount: targetChats.length,
+          usedSavedSession: !body.sessionData,
+        });
         return true;
       }
 
@@ -226,7 +266,57 @@ export function createApiHandler(
           };
         });
 
-        sendJson(res, 200, evaluatedGroups);
+        sendJson(res, 200, evaluatedGroups.map(({ accessHash, ...rest }) => rest));
+        return true;
+      }
+
+      // 6b. POST groups/{chatId} — add or update a group remotely
+      // (e.g. quarantine with {status:'BLOCKED'} or reintegrate with
+      // {status:'READY'}; accessHash is required for brand-new chats)
+      if (route.startsWith('groups/') && method === 'POST') {
+        const chatId = decodeURIComponent(route.slice('groups/'.length));
+        const body = await readJsonBody<{
+          title?: string;
+          accessHash?: string;
+          status?: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' | 'STARS' | 'SENT';
+          starsCost?: number;
+          slowmodeSeconds?: number;
+        }>(req);
+
+        const existing = db.getGroupState(chatId);
+        if (!existing && !body.accessHash) {
+          sendError(res, 400, 'accessHash is required when adding a group that is not saved yet');
+          return true;
+        }
+
+        db.upsertGroupState({
+          chatId,
+          title: body.title || existing?.title || `Chat ${chatId}`,
+          accessHash: body.accessHash || existing?.accessHash,
+          otherMessagesCount: existing?.otherMessagesCount ?? 0,
+          slowmodeSeconds: body.slowmodeSeconds ?? existing?.slowmodeSeconds ?? 0,
+          slowmodeNextSendDate: existing?.slowmodeNextSendDate,
+          starsCost: body.starsCost ?? existing?.starsCost ?? 0,
+          lastSentAt: existing?.lastSentAt,
+          status: body.status || existing?.status || 'READY',
+          lastError: body.status !== undefined ? undefined : existing?.lastError,
+        });
+
+        sendJson(res, 200, { success: true, group: db.getGroupState(chatId) });
+        return true;
+      }
+
+      // 6c. DELETE groups/{chatId} — remove a group from the rotation
+      if (route.startsWith('groups/') && method === 'DELETE') {
+        const chatId = decodeURIComponent(route.slice('groups/'.length));
+        const existing = db.getGroupState(chatId);
+        if (!existing) {
+          sendError(res, 404, `Group ${chatId} not found`);
+          return true;
+        }
+
+        db.deleteGroupState(chatId);
+        sendJson(res, 200, { success: true, deleted: chatId });
         return true;
       }
 

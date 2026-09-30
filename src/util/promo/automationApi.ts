@@ -80,11 +80,37 @@ export interface AutomationLogItem {
   details?: string;
 }
 
+const TOKEN_STORAGE_KEY = 'automationApiToken';
+
+// Reads the token once from the URL (?automationToken=...) and persists it,
+// so the panel keeps working when AUTOMATION_API_TOKEN is enabled server-side.
+function getApiToken(): string | undefined {
+  const hashQuery = window.location.hash.includes('?')
+    ? window.location.hash.slice(window.location.hash.indexOf('?'))
+    : '';
+  const fromUrl = new URLSearchParams(window.location.search).get('automationToken')
+    || (hashQuery ? new URLSearchParams(hashQuery).get('automationToken') : undefined);
+  if (fromUrl) {
+    try {
+      localStorage.setItem(TOKEN_STORAGE_KEY, fromUrl);
+    } catch { /* storage unavailable */ }
+    return fromUrl;
+  }
+
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const token = getApiToken();
   const res = await fetch(`/api/v1/automation/${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },
   });

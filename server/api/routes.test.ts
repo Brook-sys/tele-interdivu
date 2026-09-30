@@ -143,4 +143,62 @@ describe('Automation REST API routes', () => {
     expect(res.data.scheduler).toBeDefined();
     expect(Array.isArray(res.data.groups)).toBe(true);
   });
+
+  it('POST groups/{id} adds a group and GET groups never leaks accessHash', async () => {
+    const created = await api(`groups/${encodeURIComponent('-100111222')}`, {
+      method: 'POST',
+      body: JSON.stringify({ title: 'Remote Group', accessHash: '999888', status: 'READY' }),
+    });
+    expect(created.status).toBe(200);
+    expect(created.data.group.chatId).toBe('-100111222');
+
+    const list = await api('groups');
+    const found = list.data.find((g: any) => g.chatId === '-100111222');
+    expect(found).toBeDefined();
+    expect(found.accessHash).toBeUndefined();
+  });
+
+  it('POST groups/{id} without accessHash fails for unknown chats and can quarantine existing ones', async () => {
+    const missing = await api(`groups/${encodeURIComponent('-100999000')}`, {
+      method: 'POST',
+      body: JSON.stringify({ title: 'No Hash' }),
+    });
+    expect(missing.status).toBe(400);
+
+    const quarantine = await api(`groups/${encodeURIComponent('-100111222')}`, {
+      method: 'POST',
+      body: JSON.stringify({ status: 'BLOCKED' }),
+    });
+    expect(quarantine.status).toBe(200);
+    expect(quarantine.data.group.status).toBe('BLOCKED');
+  });
+
+  it('DELETE groups/{id} removes the group from the rotation', async () => {
+    const res = await api(`groups/${encodeURIComponent('-100111222')}`, { method: 'DELETE' });
+    expect(res.status).toBe(200);
+
+    const list = await api('groups');
+    expect(list.data.find((g: any) => g.chatId === '-100111222')).toBeUndefined();
+  });
+
+  it('remote takeover without saved session or targets fails clearly', async () => {
+    const res = await api('takeover', { method: 'POST', body: JSON.stringify({}) });
+    expect(res.status).toBe(400);
+    expect(String(res.data.error)).toContain('saved session');
+  });
+
+  it('requires bearer token when AUTOMATION_API_TOKEN is set', async () => {
+    process.env.AUTOMATION_API_TOKEN = 'test-token';
+    try {
+      const denied = await api('status');
+      expect(denied.status).toBe(401);
+
+      const allowed = await api('status', {
+        headers: { Authorization: 'Bearer test-token' },
+      });
+      expect(allowed.status).toBe(200);
+    } finally {
+      delete process.env.AUTOMATION_API_TOKEN;
+    }
+  });
 });

@@ -33,6 +33,7 @@ export interface AutomationCampaign {
 export interface GroupStateRecord {
   chatId: string;
   title: string;
+  accessHash?: string;
   lastSentAt?: number;
   otherMessagesCount: number;
   slowmodeSeconds: number;
@@ -132,6 +133,7 @@ export class AutomationDatabase {
       CREATE TABLE IF NOT EXISTS group_state (
         chat_id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
+        access_hash TEXT,
         last_sent_at INTEGER,
         other_messages_count INTEGER NOT NULL DEFAULT 0,
         slowmode_seconds INTEGER NOT NULL DEFAULT 0,
@@ -157,6 +159,11 @@ export class AutomationDatabase {
     `);
 
     // Migrations for existing databases: ensure new columns exist
+    try {
+      this.db.exec('ALTER TABLE group_state ADD COLUMN access_hash TEXT');
+    } catch {
+      // Column already exists
+    }
     try {
       this.db.exec('ALTER TABLE group_state ADD COLUMN stars_cost INTEGER NOT NULL DEFAULT 0');
     } catch {
@@ -380,11 +387,12 @@ export class AutomationDatabase {
     const now = Math.floor(Date.now() / 1000);
     this.db.prepare(`
       INSERT INTO group_state (
-        chat_id, title, last_sent_at, other_messages_count, slowmode_seconds,
+        chat_id, title, access_hash, last_sent_at, other_messages_count, slowmode_seconds,
         slowmode_next_send_date, stars_cost, status, last_error, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(chat_id) DO UPDATE SET
         title = excluded.title,
+        access_hash = coalesce(excluded.access_hash, group_state.access_hash),
         last_sent_at = coalesce(excluded.last_sent_at, group_state.last_sent_at),
         other_messages_count = excluded.other_messages_count,
         slowmode_seconds = excluded.slowmode_seconds,
@@ -396,6 +404,7 @@ export class AutomationDatabase {
     `).run(
       record.chatId,
       record.title,
+      record.accessHash ?? null,
       record.lastSentAt ?? null,
       record.otherMessagesCount,
       record.slowmodeSeconds,
@@ -425,6 +434,10 @@ export class AutomationDatabase {
     this.db.prepare(`
       DELETE FROM group_state WHERE chat_id NOT IN (${placeholders})
     `).run(...validChatIds);
+  }
+
+  deleteGroupState(chatId: string) {
+    this.db.prepare('DELETE FROM group_state WHERE chat_id = ?').run(chatId);
   }
 
   incrementGroupOtherMessages(chatId: string) {
@@ -476,6 +489,7 @@ export class AutomationDatabase {
     return rows.map((row) => ({
       chatId: String(row.chat_id),
       title: String(row.title),
+      accessHash: row.access_hash ? String(row.access_hash) : undefined,
       lastSentAt: row.last_sent_at ? Number(row.last_sent_at) : undefined,
       otherMessagesCount: Number(row.other_messages_count),
       slowmodeSeconds: Number(row.slowmode_seconds),
@@ -493,6 +507,7 @@ export class AutomationDatabase {
     return {
       chatId: String(row.chat_id),
       title: String(row.title),
+      accessHash: row.access_hash ? String(row.access_hash) : undefined,
       lastSentAt: row.last_sent_at ? Number(row.last_sent_at) : undefined,
       otherMessagesCount: Number(row.other_messages_count),
       slowmodeSeconds: Number(row.slowmode_seconds),
