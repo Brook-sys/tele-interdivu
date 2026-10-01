@@ -149,12 +149,20 @@ export class AutomationScheduler {
 
   private lastRevalidateAt = 0;
 
+  private waitStartMs?: number;
+
   private lastWaitLogToken?: string;
 
-  // Logs a wait transition once per kind, so silent idle periods are visible
-  // in the history without spamming it on every loop iteration.
+  // Logs a wait transition only when the queue stays in that wait kind for
+  // at least a minute, so genuinely idle periods appear in the history
+  // without spamming it on short inter-send cooldowns.
   private logWaitTransitionOnce(token: string, snippet: string, createdAt: number) {
-    if (this.lastWaitLogToken === token) return;
+    const now = Date.now();
+    if (this.waitStartMs === undefined) {
+      this.waitStartMs = now;
+      return;
+    }
+    if (now - this.waitStartMs < 60_000 || this.lastWaitLogToken === token) return;
     this.lastWaitLogToken = token;
     this.db.addLog({
       createdAt,
@@ -164,6 +172,11 @@ export class AutomationScheduler {
       linkUsed: '',
       status: 'SKIPPED',
     });
+  }
+
+  private clearWaitTracking() {
+    this.waitStartMs = undefined;
+    this.lastWaitLogToken = undefined;
   }
 
   getState(): Readonly<SchedulerState> {
@@ -558,7 +571,7 @@ export class AutomationScheduler {
             return timeA - timeB;
           });
           eligibleGroup = readyGroups[0];
-          this.lastWaitLogToken = undefined;
+          this.clearWaitTracking();
         }
 
         if (!eligibleGroup) {
