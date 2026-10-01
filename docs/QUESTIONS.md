@@ -298,3 +298,13 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     (4) auth opcional por `AUTOMATION_API_TOKEN` (Bearer) — o painel lê o
     token uma vez de `?automationToken=` na URL e persiste em localStorage.
     Referência completa em `docs/AUTOMATION_API.md`.
+
+49. **Períodos ociosos invisíveis e ciclo de revalidação lento** — Quando todos
+    os grupos estavam em cooldown/aguardando mensagens, o scheduler ficava
+    minutos sem registrar nada no histórico (parecia travado). E com 41+
+    grupos quarentenados, o lote de 3 sondagens a cada 30 min levava ~7h para
+    cobrir todos. Fix: (1) `logWaitTransitionOnce` registra uma entrada no
+    histórico a cada mudança de tipo de espera (cooldown/mensagens/ocioso);
+    (2) lote de revalidação subiu para 10 por ciclo (~2h para cobrir 40+
+    quarentenados). Nota: `nextRunAt` igual a `sleepUntil` na API de status
+    é intencional durante o delay pré-envio (a próxima ação é o fim do sono).

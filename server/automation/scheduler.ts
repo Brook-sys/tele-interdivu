@@ -123,7 +123,7 @@ type CheckMessagesCallback = (chatId: string, minRequired: number) => Promise<nu
 type ProbeChatCallback = (chatId: string) => Promise<ChatProbeResult | undefined>;
 
 const REVALIDATE_INTERVAL_MS = 30 * 60_000;
-const REVALIDATE_BATCH_SIZE = 3;
+const REVALIDATE_BATCH_SIZE = 10;
 
 export class AutomationScheduler {
   private state: SchedulerState = {
@@ -148,6 +148,23 @@ export class AutomationScheduler {
   ) {}
 
   private lastRevalidateAt = 0;
+
+  private lastWaitLogToken?: string;
+
+  // Logs a wait transition once per kind, so silent idle periods are visible
+  // in the history without spamming it on every loop iteration.
+  private logWaitTransitionOnce(token: string, snippet: string, createdAt: number) {
+    if (this.lastWaitLogToken === token) return;
+    this.lastWaitLogToken = token;
+    this.db.addLog({
+      createdAt,
+      chatId: 'system',
+      chatTitle: 'Sistema de Automação',
+      messageSnippet: snippet,
+      linkUsed: '',
+      status: 'SKIPPED',
+    });
+  }
 
   getState(): Readonly<SchedulerState> {
     return { ...this.state };
@@ -541,11 +558,18 @@ export class AutomationScheduler {
             return timeA - timeB;
           });
           eligibleGroup = readyGroups[0];
+          this.lastWaitLogToken = undefined;
         }
 
         if (!eligibleGroup) {
           // No groups currently satisfy all criteria
           if (countWaitingSlowmode > 0) {
+            this.logWaitTransitionOnce(
+              'COOLDOWN',
+              `Nenhum grupo elegível. Aguardando cooldown — próximo disponível: `
+              + `${slowestGroupTitle} em ~${Math.round(minSlowmodeWaitSeconds)}s.`,
+              serverNow,
+            );
             this.state.status = 'WAITING_COOLDOWN';
             this.state.currentChatTitle = slowestGroupTitle;
             this.state.waitingReason = `Aguardando cooldown de ${slowestGroupTitle}`;
@@ -558,6 +582,11 @@ export class AutomationScheduler {
           }
 
           if (countWaitingMessages > 0) {
+            this.logWaitTransitionOnce(
+              'MESSAGES',
+              `Nenhum grupo elegível. Todos aguardam ${config.minOtherMessages}+ mensagens de terceiros.`,
+              serverNow,
+            );
             this.state.status = 'WAITING_MESSAGES';
             this.state.waitingReason = `Aguardando novas mensagens nos grupos (mínimo: ${config.minOtherMessages})`;
             await this.sleep(15_000, signal);
@@ -566,6 +595,11 @@ export class AutomationScheduler {
             continue;
           }
 
+          this.logWaitTransitionOnce(
+            'IDLE',
+            'Nenhum grupo elegível no momento (todos em cooldown, aguardando mensagens ou quarentenados).',
+            serverNow,
+          );
           await this.sleep(15_000, signal);
           continue;
         }
