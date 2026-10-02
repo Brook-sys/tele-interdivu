@@ -29,6 +29,8 @@ import styles from './PromoExtract.module.scss';
 
 type OwnProps = {
   isActive: boolean;
+  // Rendered inside the full-screen AutomationMode (no back button)
+  isEmbedded?: boolean;
   onReset: () => void;
 };
 
@@ -37,7 +39,7 @@ type ExtractTab = 'invite_link' | 'tg_link' | 'external_link';
 const LIST_LIMIT = 200;
 const REFRESH_INTERVAL_MS = 10_000;
 
-const PromoExtract = ({ isActive, onReset }: OwnProps) => {
+const PromoExtract = ({ isActive, isEmbedded, onReset }: OwnProps) => {
   const [items, setItems] = useState<ExtractedLinkItem[]>([]);
   const [stats, setStats] = useState<ExtractStatsResponse>();
   const [activeTab, setActiveTab] = useState<ExtractTab>('invite_link');
@@ -47,7 +49,8 @@ const PromoExtract = ({ isActive, onReset }: OwnProps) => {
   const [isSubmitting, markSubmitting, unmarkSubmitting] = useFlag();
 
   useHistoryBack({
-    isActive,
+    // Embedded in AutomationMode: navigation/history is owned by the parent shell
+    isActive: isActive && !isEmbedded,
     onBack: onReset,
   });
 
@@ -125,14 +128,16 @@ const PromoExtract = ({ isActive, onReset }: OwnProps) => {
   return (
     <div className={styles.root}>
       <div className="left-header">
-        <Button
-          round
-          size="smaller"
-          color="translucent"
-          ariaLabel="Return to chat list"
-          iconName="arrow-left"
-          onClick={onReset}
-        />
+        {!isEmbedded && (
+          <Button
+            round
+            size="smaller"
+            color="translucent"
+            ariaLabel="Return to chat list"
+            iconName="arrow-left"
+            onClick={onReset}
+          />
+        )}
         <h3>{lang('PromoExtractTitle')}</h3>
       </div>
 

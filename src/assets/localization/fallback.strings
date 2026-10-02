@@ -3228,3 +3228,12 @@
 "PromoOrchestrationGroupsCount_other" = "{count} grupos";
 "PromoOrchestrationGrantsFeed" = "Intercalação (grants)";
 "PromoOrchestrationNoGrants" = "Nenhum envio orquestrado ainda.";
+"AutomationModeTitle" = "Modo Automação";
+"AutomationModeLostTitle" = "Conexão com o daemon perdida";
+"AutomationModeLostText" = "A automação parou de responder ou a sessão foi reconectada em outro lugar. Você pode reconectar sem perder configurações, ou voltar ao chat.";
+"AutomationModeReconnect" = "Reconectar";
+"AutomationModeBackToChat" = "Voltar ao chat";
+"AutomationModeStepTakeover" = "Entregando sessão ao daemon…";
+"AutomationModeStepDaemon" = "Daemon confirmou a conexão";
+"AutomationModeStepDisconnect" = "Desconectando o visualizador";
+"AutomationModeStepDone" = "Pronto";

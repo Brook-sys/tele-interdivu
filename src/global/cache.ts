@@ -291,6 +291,10 @@ function unsafeMigrateCache(cached: GlobalState, initialState: GlobalState) {
     ...cached.promo,
   };
 
+  if (!cached.automationMode) {
+    cached.automationMode = initialState.automationMode;
+  }
+
   if (!cached.chats.similarChannelsById) {
     cached.chats.similarChannelsById = initialState.chats.similarChannelsById;
   }

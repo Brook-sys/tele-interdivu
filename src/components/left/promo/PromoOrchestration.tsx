@@ -26,12 +26,14 @@ import styles from './PromoOrchestration.module.scss';
 
 type OwnProps = {
   isActive: boolean;
+  // Rendered inside the full-screen AutomationMode (no back button)
+  isEmbedded?: boolean;
   onReset: () => void;
 };
 
 const REFRESH_INTERVAL_MS = 5000;
 
-const PromoOrchestration = ({ isActive, onReset }: OwnProps) => {
+const PromoOrchestration = ({ isActive, isEmbedded, onReset }: OwnProps) => {
   const [info, setInfo] = useState<OrchestratorInfo>();
   const [workers, setWorkers] = useState<OrchestratorWorker[]>([]);
   const [grants, setGrants] = useState<OrchestratorGrant[]>([]);
@@ -39,7 +41,8 @@ const PromoOrchestration = ({ isActive, onReset }: OwnProps) => {
   const [loadError, setLoadError] = useState<string>();
 
   useHistoryBack({
-    isActive,
+    // Embedded in AutomationMode: navigation/history is owned by the parent shell
+    isActive: isActive && !isEmbedded,
     onBack: onReset,
   });
 
@@ -126,14 +129,16 @@ const PromoOrchestration = ({ isActive, onReset }: OwnProps) => {
   return (
     <div className={styles.root}>
       <div className="left-header">
-        <Button
-          round
-          size="smaller"
-          color="translucent"
-          ariaLabel="Return to chat list"
-          iconName="arrow-left"
-          onClick={onReset}
-        />
+        {!isEmbedded && (
+          <Button
+            round
+            size="smaller"
+            color="translucent"
+            ariaLabel="Return to chat list"
+            iconName="arrow-left"
+            onClick={onReset}
+          />
+        )}
         <h3>{lang('PromoOrchestrationTitle')}</h3>
       </div>
 

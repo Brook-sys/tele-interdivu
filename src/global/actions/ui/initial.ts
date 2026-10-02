@@ -2,7 +2,7 @@ import { addCallback } from '../../../lib/teact/teactn';
 
 import type { ApiNotification } from '../../../api/types';
 import type { ActionReturnType, GlobalState } from '../../types';
-import { type LangCode, LeftColumnContent } from '../../../types';
+import { type LangCode } from '../../../types';
 
 import { requestMutation } from '../../../lib/fasterdom/fasterdom';
 import { IS_ELECTRON, IS_MULTIACCOUNT_SUPPORTED, IS_TAURI } from '../../../util/browser/globalEnvironment';
@@ -102,10 +102,11 @@ addActionHandler('switchMultitabRole', async (global, actions, payload): Promise
 
       const isAutomationRunning = await checkIsAutomationRunning();
       if (isAutomationRunning) {
-        actions.openLeftColumnContent({
-          contentKey: LeftColumnContent.PromoAutomation,
-          tabId: getCurrentTabId(),
-        });
+        // Daemon owns the session: enter full-screen automation mode and do
+        // NOT initApi — connecting the browser client here would duplicate
+        // the Telegram key (AUTH_KEY_DUPLICATED). F5/refresh re-enters this
+        // same state.
+        actions.activateAutomationMode();
       } else {
         actions.initApi();
       }

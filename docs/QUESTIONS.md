@@ -391,3 +391,17 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     todo grupo é verificado uma vez por processo (varredura inicial em ciclo
     rápido), então um grupo que piorou é pego antes do primeiro envio da
     sessão; transições READY→STARS/BLOCKED são logadas.
+
+57. **Modo Automação em tela cheia com takeover rigoroso da UI** — Quando o
+    daemon assume a sessão, o app inteiro entra em `AppScreens.automation`:
+    uma tela dedicada com nav entre Automação / Extração / Orquestração e o
+    painel de chat nunca é montado (o cliente do browser fica desconectado,
+    logo AUTH_KEY_DUPLICATED é estruturalmente impossível). Boot detecta
+    "automation running" via API e já entra direto no modo (F5-safe).
+    Transição de takeover mostra uma sequência animada de preparação
+    (entrega de sessão → daemon pronto → desconexão do viewer). Se o daemon
+    para de responder (3 falhas de poll), aparece painel de falha com
+    "Reconectar" (takeover remoto) ou "Voltar ao chat" (release + initApi).
+    BroadcastChannel propaga o modo entre abas — outra aba que recebe o
+    sinal re-checa o daemon e entra/sai junto. Botão voltar do browser só
+    navega entre as telas do modo; sair exige release explícito.

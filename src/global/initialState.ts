@@ -166,6 +166,10 @@ export const INITIAL_GLOBAL_STATE: GlobalState = {
     byUserId: {},
   },
 
+  automationMode: {
+    isActive: false,
+  },
+
   chats: {
     listIds: {},
     isFullyLoaded: {},

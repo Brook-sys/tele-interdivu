@@ -76,7 +76,6 @@ import type { ApiCredentials } from '../../components/payment/PaymentModal';
 import type { FoldersActions } from '../../hooks/reducers/useFoldersReducer';
 import type { ReducerAction } from '../../hooks/useReducer';
 import type { P2pMessage } from '../../lib/vibecalls';
-import type { PromoSettings } from './promo';
 import type {
   AccountSettings,
   AttachmentCompression,
@@ -121,6 +120,7 @@ import type {
 import type { BrowserModalStateType, BrowserTab } from '../../types/browser';
 import type { WebApp, WebAppOutboundEvent } from '../../types/webapp';
 import type { DownloadableMedia } from '../helpers';
+import type { PromoSettings } from './promo';
 import type { SharedState } from './sharedState';
 import type { ReactionDeletionContext, TabState } from './tabState';
 
@@ -400,6 +400,10 @@ export interface ActionPayloads {
   setPromoSettings: {
     patch: Partial<PromoSettings>;
   };
+  activateAutomationMode: undefined;
+  deactivateAutomationMode: undefined;
+  consumeAutomationIntroTransition: undefined;
+  syncAutomationModeFromOtherTab: undefined;
   toggleIsProtected: {
     chatId: string;
     isProtected: boolean;

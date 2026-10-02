@@ -30,6 +30,7 @@ import { useSignalEffect } from '../hooks/useSignalEffect';
 import { getIsInBackground } from '../hooks/window/useBackgroundMode';
 
 import Auth from './auth/Auth';
+import AutomationMode from './automation/AutomationMode';
 import Notifications from './common/Notifications';
 import UiLoader from './common/UiLoader';
 import AppInactive from './main/AppInactive';
@@ -42,6 +43,7 @@ import styles from './App.module.scss';
 
 type StateProps = {
   authState: GlobalState['auth']['state'];
+  isAutomationModeActive: boolean;
   isScreenLocked?: boolean;
   hasPasscode?: boolean;
   inactiveReason?: 'auth' | 'otherClient';
@@ -55,6 +57,7 @@ type StateProps = {
 enum AppScreens {
   auth,
   main,
+  automation,
   lock,
   inactive,
 }
@@ -65,6 +68,7 @@ const INACTIVE_PAGE_TITLE = `${ACTIVE_PAGE_TITLE} ${INACTIVE_MARKER}`;
 
 const App = ({
   authState,
+  isAutomationModeActive,
   isScreenLocked,
   hasPasscode,
   inactiveReason,
@@ -140,6 +144,11 @@ const App = ({
   } else if (isScreenLocked) {
     page = 'lock';
     activeKey = AppScreens.lock;
+  } else if (isAutomationModeActive && hasStoredSession()) {
+    // Daemon owns the Telegram session; the chat client stays disconnected
+    // so AUTH_KEY_DUPLICATED is structurally impossible.
+    page = 'main';
+    activeKey = AppScreens.automation;
   } else if (authState) {
     switch (authState) {
       case 'authorizationStateWaitPhoneNumber':
@@ -208,6 +217,8 @@ const App = ({
         return <Auth />;
       case AppScreens.main:
         return <Main isMobile={isMobile} />;
+      case AppScreens.automation:
+        return <AutomationMode />;
       case AppScreens.lock:
         return <LockScreen isLocked={isScreenLocked} />;
       case AppScreens.inactive:
@@ -275,6 +286,7 @@ export default withGlobal(
 
     return {
       authState,
+      isAutomationModeActive: global.automationMode.isActive,
       isScreenLocked: global.passcode?.isScreenLocked,
       hasPasscode: global.passcode?.hasPasscode,
       inactiveReason: selectTabState(global).inactiveReason,

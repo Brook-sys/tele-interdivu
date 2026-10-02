@@ -32,6 +32,7 @@ import './ui/aiMessageEditor';
 import './ui/users';
 import './ui/settings';
 import './ui/promo';
+import './ui/automationMode';
 import './ui/misc';
 import './ui/payments';
 import './ui/calls';

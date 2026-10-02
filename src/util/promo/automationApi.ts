@@ -199,7 +199,8 @@ export async function downloadExtractedLinks(kind?: string): Promise<void> {
 
 export function startAutomationTakeover(payload: {
   sessionData: any;
-  targetChats: {
+  // Optional when reconnecting: daemon reuses the saved rotation
+  targetChats?: {
     id: string;
     title: string;
     accessHash?: string;

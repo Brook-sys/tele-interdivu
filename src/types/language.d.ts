@@ -2382,6 +2382,15 @@ export interface LangPair {
   'PromoOrchestrationNoWorkers': undefined;
   'PromoOrchestrationGrantsFeed': undefined;
   'PromoOrchestrationNoGrants': undefined;
+  'AutomationModeTitle': undefined;
+  'AutomationModeLostTitle': undefined;
+  'AutomationModeLostText': undefined;
+  'AutomationModeReconnect': undefined;
+  'AutomationModeBackToChat': undefined;
+  'AutomationModeStepTakeover': undefined;
+  'AutomationModeStepDaemon': undefined;
+  'AutomationModeStepDisconnect': undefined;
+  'AutomationModeStepDone': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {

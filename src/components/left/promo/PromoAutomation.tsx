@@ -51,6 +51,8 @@ import styles from './PromoAutomation.module.scss';
 
 type OwnProps = {
   isActive: boolean;
+  // Rendered inside the full-screen AutomationMode (no back button, stop exits the mode)
+  isEmbedded?: boolean;
   onReset: () => void;
 };
 
@@ -68,6 +70,7 @@ const STATUS_REFRESH_INTERVAL_MS = 3000;
 
 const PromoAutomation = ({
   isActive,
+  isEmbedded,
   onReset,
   settings,
   chatsById,
@@ -117,7 +120,8 @@ const PromoAutomation = ({
   const [microPauseSeconds, setMicroPauseSeconds] = useState('300');
 
   useHistoryBack({
-    isActive,
+    // Embedded in AutomationMode: navigation/history is owned by the parent shell
+    isActive: isActive && !isEmbedded,
     onBack: onReset,
   });
 
@@ -250,6 +254,10 @@ const PromoAutomation = ({
       // 2. Disconnect browser client so the daemon owns the session exclusively
       await callApi('disconnect');
 
+      // 3. Cover the whole app with the automation screen (no chat access while the daemon runs)
+      const { activateAutomationMode } = getActions();
+      activateAutomationMode();
+
       await loadStatusAndData();
     } catch (err: any) {
       setActionError(err.message);
@@ -266,8 +274,12 @@ const PromoAutomation = ({
       // 1. Stop backend daemon and release session
       await stopAutomationRelease();
 
-      // 2. Reconnect browser client
+      // 2. Reconnect browser client and leave the full-screen mode
       initApi();
+      if (isEmbedded) {
+        const { deactivateAutomationMode } = getActions();
+        deactivateAutomationMode();
+      }
 
       await loadStatusAndData();
     } catch (err: any) {
@@ -957,14 +969,16 @@ const PromoAutomation = ({
   return (
     <div className={styles.root}>
       <div className="left-header">
-        <Button
-          round
-          size="smaller"
-          color="translucent"
-          ariaLabel="Return to chat list"
-          iconName="arrow-left"
-          onClick={onReset}
-        />
+        {!isEmbedded && (
+          <Button
+            round
+            size="smaller"
+            color="translucent"
+            ariaLabel="Return to chat list"
+            iconName="arrow-left"
+            onClick={onReset}
+          />
+        )}
         <h3>{lang('PromoAutomationTitle')}</h3>
       </div>
 

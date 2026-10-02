@@ -208,6 +208,13 @@ export type GlobalState = {
 
   promo: PromoState;
 
+  // Full-screen automation mode (daemon owns the session; browser client stays disconnected)
+  automationMode: {
+    isActive: boolean;
+    // Browser shows the animated "preparation" sequence when set
+    showIntroTransition?: boolean;
+  };
+
   chats: {
     // TODO Replace with `Partial<Record>` to properly handle missing keys
     byId: Record<string, ApiChat>;
