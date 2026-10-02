@@ -5,6 +5,7 @@ import {
 } from '../../../lib/teact/teact';
 
 import buildClassName from '../../../util/buildClassName';
+import { copyTextToClipboard } from '../../../util/clipboard';
 import {
   clearExtractedLinks,
   downloadExtractedLinks,
@@ -12,6 +13,7 @@ import {
   type ExtractStatsResponse,
   fetchExtractedLinks,
   fetchExtractStats,
+  resolveExtractedLink,
   saveAutomationConfig,
 } from '../../../util/promo/automationApi';
 
@@ -47,6 +49,9 @@ const PromoExtract = ({ isActive, isEmbedded, onReset }: OwnProps) => {
   const [actionError, setActionError] = useState<string>();
   const [isLoading, startLoading, stopLoading] = useFlag(true);
   const [isSubmitting, markSubmitting, unmarkSubmitting] = useFlag();
+  const [copiedValue, setCopiedValue] = useState<string>();
+  const [resolvingValue, setResolvingValue] = useState<string>();
+  const [sortBy, setSortBy] = useState<'recent' | 'seen'>('recent');
 
   useHistoryBack({
     // Embedded in AutomationMode: navigation/history is owned by the parent shell
@@ -64,6 +69,7 @@ const PromoExtract = ({ isActive, isEmbedded, onReset }: OwnProps) => {
           kind: activeTab,
           q: searchQuery.trim() || undefined,
           limit: LIST_LIMIT,
+          sort: sortBy,
         }),
         fetchExtractStats(),
       ]);
@@ -85,7 +91,7 @@ const PromoExtract = ({ isActive, isEmbedded, onReset }: OwnProps) => {
       load();
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [isActive, activeTab, searchQuery]);
+  }, [isActive, activeTab, searchQuery, sortBy]);
 
   const handleToggleExtractor = useLastCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.checked;
@@ -97,6 +103,25 @@ const PromoExtract = ({ isActive, isEmbedded, onReset }: OwnProps) => {
       setActionError(err.message);
     } finally {
       unmarkSubmitting();
+    }
+  });
+
+  const handleCopy = useLastCallback((value: string) => {
+    copyTextToClipboard(value);
+    setCopiedValue(value);
+    setTimeout(() => setCopiedValue(undefined), 1500);
+  });
+
+  const handleResolve = useLastCallback(async (item: ExtractedLinkItem) => {
+    setResolvingValue(item.value);
+    setActionError(undefined);
+    try {
+      await resolveExtractedLink(item.kind, item.value);
+      await load();
+    } catch (err: any) {
+      setActionError(err.message);
+    } finally {
+      setResolvingValue(undefined);
     }
   });
 
@@ -112,10 +137,10 @@ const PromoExtract = ({ isActive, isEmbedded, onReset }: OwnProps) => {
     }
   });
 
-  const handleExport = useLastCallback(async () => {
+  const handleExport = useLastCallback(async (format: 'txt' | 'csv', scopeAll: boolean) => {
     markSubmitting();
     try {
-      await downloadExtractedLinks(activeTab);
+      await downloadExtractedLinks(scopeAll ? undefined : activeTab, format);
     } catch (err: any) {
       setActionError(err.message);
     } finally {
@@ -189,8 +214,23 @@ const PromoExtract = ({ isActive, isEmbedded, onReset }: OwnProps) => {
         />
 
         <div className={styles.actionsRow}>
-          <Button size="smaller" disabled={isSubmitting || !items.length} onClick={handleExport}>
-            {lang('PromoExtractExport')}
+          <Button
+            size="smaller"
+            color="translucent"
+            onClick={() => setSortBy(sortBy === 'recent' ? 'seen' : 'recent')}
+          >
+            {sortBy === 'recent' ? lang('PromoExtractSortRecent') : lang('PromoExtractSortSeen')}
+          </Button>
+        </div>
+        <div className={styles.actionsRow}>
+          <Button size="smaller" disabled={isSubmitting || !items.length} onClick={() => handleExport('txt', false)}>
+            {lang('PromoExtractExportTxt')}
+          </Button>
+          <Button size="smaller" disabled={isSubmitting || !items.length} onClick={() => handleExport('csv', false)}>
+            {lang('PromoExtractExportCsv')}
+          </Button>
+          <Button size="smaller" disabled={isSubmitting} onClick={() => handleExport('csv', true)}>
+            {lang('PromoExtractExportCsvAll')}
           </Button>
           <Button size="smaller" color="danger" disabled={isSubmitting || !items.length} onClick={handleClear}>
             {lang('PromoExtractClear')}
@@ -206,18 +246,88 @@ const PromoExtract = ({ isActive, isEmbedded, onReset }: OwnProps) => {
             {!items.length && (
               <div className={styles.hint}>{lang('PromoExtractEmpty')}</div>
             )}
-            {items.map((item) => (
-              <div key={`${item.kind}:${item.value}`} className={styles.listItem}>
-                <div className={styles.linkValue}>{item.value}</div>
-                <div className={styles.itemMeta}>
-                  <span>{item.sourceChatTitle}</span>
-                  <span>
-                    {lang('PromoExtractTimesSeen', { count: item.timesSeen }, { pluralValue: item.timesSeen })}
-                  </span>
-                  <span>{new Date(item.lastSeenAt * 1000).toLocaleString(lang.code)}</span>
+            {items.map((item) => {
+              const isCopyFeedback = copiedValue === item.value;
+              const isResolving = resolvingValue === item.value;
+              const canResolve = item.kind === 'invite_link' && !item.resolvedTitle && !item.resolvedFailed;
+              return (
+                <div key={`${item.kind}:${item.value}`} className={styles.listItem}>
+                  <div className={styles.linkRow}>
+                    <div
+                      className={styles.linkValue}
+                      title={lang('PromoExtractClickToCopy')}
+                      onClick={() => handleCopy(item.value)}
+                    >
+                      {item.value}
+                    </div>
+                    <div className={styles.linkActions}>
+                      <Button
+                        round
+                        size="smaller"
+                        color="translucent"
+                        ariaLabel={lang('PromoExtractCopy')}
+                        iconName="copy"
+                        onClick={() => handleCopy(item.value)}
+                      />
+                      {canResolve && (
+                        <Button
+                          round
+                          size="smaller"
+                          color="translucent"
+                          ariaLabel={lang('PromoExtractResolve')}
+                          iconName="search"
+                          disabled={isResolving}
+                          onClick={() => handleResolve(item)}
+                        />
+                      )}
+                    </div>
+                  </div>
+                  {isCopyFeedback && (
+                    <div className={styles.copiedHint}>{lang('PromoExtractCopied')}</div>
+                  )}
+                  {item.resolvedFailed && (
+                    <div className={styles.resolvedFailed}>{lang('PromoExtractInviteInvalid')}</div>
+                  )}
+                  {item.resolvedTitle && (
+                    <div className={styles.resolvedCard}>
+                      {item.resolvedPhotoB64 && (
+                        <img className={styles.resolvedPhoto} src={item.resolvedPhotoB64} alt="" />
+                      )}
+                      <div
+                        className={styles.resolvedText}
+                        title={item.resolvedAbout || undefined}
+                      >
+                        <div className={styles.resolvedTitle}>{item.resolvedTitle}</div>
+                        <div className={styles.resolvedMeta}>
+                          <span>
+                            {lang(
+                              item.resolvedType === 'channel'
+                                ? 'PromoExtractTypeChannel' : 'PromoExtractTypeGroup',
+                            )}
+                          </span>
+                          {item.resolvedMembers !== undefined && (
+                            <span>
+                              {lang(
+                                'PromoExtractMembers',
+                                { count: item.resolvedMembers },
+                                { pluralValue: item.resolvedMembers },
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <div className={styles.itemMeta}>
+                    <span>{item.sourceChatTitle}</span>
+                    <span>
+                      {lang('PromoExtractTimesSeen', { count: item.timesSeen }, { pluralValue: item.timesSeen })}
+                    </span>
+                    <span>{new Date(item.lastSeenAt * 1000).toLocaleString(lang.code)}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

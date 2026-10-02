@@ -212,3 +212,12 @@ environment:
 - Panel: "Orquestração" in the side menu (workers show a hint instead).
 - Endpoints (master only): `GET info`, `GET workers`, `DELETE workers?workerId=`,
   `GET grants?limit=`, `POST register|heartbeat|claim|report`.
+
+### Extract niceties
+
+- `GET extract/export` agora aceita `format=csv` (com BOM UTF-8, datas em ISO
+  8601, escapamento RFC 4180) e sem `kind` exporta todos os tipos.
+- `POST extract/resolve` body `{ kind: 'invite_link', value }` — resolve o
+  convite via `messages.CheckChatInvite` (read-only) e registra
+  título/membros/tipo/about/foto-stripped na linha. 410 quando o convite está
+  expirado/inválido (fica registrado para não esgotar re-tentativas).

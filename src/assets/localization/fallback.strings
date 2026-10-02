@@ -3237,3 +3237,17 @@
 "AutomationModeStepDaemon" = "Daemon confirmou a conexão";
 "AutomationModeStepDisconnect" = "Desconectando o visualizador";
 "AutomationModeStepDone" = "Pronto";
+"PromoExtractSortRecent" = "Recentes primeiro";
+"PromoExtractSortSeen" = "Mais vistos primeiro";
+"PromoExtractExportTxt" = "TXT (aba)";
+"PromoExtractExportCsv" = "CSV (aba)";
+"PromoExtractExportCsvAll" = "CSV completo";
+"PromoExtractClickToCopy" = "Clique para copiar";
+"PromoExtractCopy" = "Copiar link";
+"PromoExtractResolve" = "Ver destino do convite";
+"PromoExtractCopied" = "Copiado!";
+"PromoExtractInviteInvalid" = "Convite expirado ou inválido";
+"PromoExtractTypeChannel" = "Canal";
+"PromoExtractTypeGroup" = "Grupo";
+"PromoExtractMembers_one" = "{count} membro";
+"PromoExtractMembers_other" = "{count} membros";

@@ -19,6 +19,14 @@ export interface ChatProbeResult {
   slowmodeSeconds?: number;
 }
 
+export interface InviteResolveResult {
+  title: string;
+  members?: number;
+  chatType: string;
+  about?: string;
+  photoB64?: string;
+}
+
 const CHANNEL_ID_BASE = 1000000000000n;
 
 function buildInputPeerForChat(chatId: string, accessHash?: string): GramJs.TypeInputPeer {
@@ -390,6 +398,50 @@ export class TelegramRunner {
 
       return undefined;
     }
+  }
+
+  // Resolves an invite link (read-only, no join). photoStrippedSize ships
+  // inline bytes (a few hundred B) so storing it as base64 is free.
+  async resolveInviteLink(hash: string): Promise<InviteResolveResult | undefined> {
+    if (!this.client || !this.client.isConnected()) return undefined;
+
+    const result = await this.client.invoke(
+      new GramJs.messages.CheckChatInvite({ hash }),
+    ) as any;
+
+    if (!result) return undefined;
+
+    const findStrippedPhoto = (photo: any): string | undefined => {
+      const stripped = photo?.sizes?.find((size: any) => (
+        size?.className === 'PhotoStrippedSize' && size?.bytes
+      ));
+      if (!stripped) return undefined;
+      const bytes = stripped.bytes instanceof Buffer
+        ? stripped.bytes : Buffer.from(stripped.bytes);
+      return `data:image/jpeg;base64,${bytes.toString('base64')}`;
+    };
+
+    // chatInviteAlready: our account is already a member of the target
+    if (result.className === 'ChatInviteAlready') {
+      const chatObj = result.chat;
+      const isChannel = chatObj?.className === 'Channel';
+      return {
+        title: chatObj?.title || '(sem título)',
+        members: chatObj?.participantsCount,
+        chatType: isChannel ? (chatObj.broadcast ? 'channel' : 'group') : 'group',
+        photoB64: findStrippedPhoto(chatObj?.photo),
+      };
+    }
+
+    return {
+      title: result.title || '(sem título)',
+      members: result.participantsCount,
+      chatType: result.channel
+        ? (result.broadcast ? 'channel' : 'group')
+        : 'group',
+      about: result.about,
+      photoB64: findStrippedPhoto(result.photo),
+    };
   }
 
   async sendMessage(

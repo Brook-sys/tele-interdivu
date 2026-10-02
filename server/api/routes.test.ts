@@ -291,3 +291,90 @@ describe('Extractor REST API', () => {
     expect(after.data[0].kind).toBe('external_link');
   });
 });
+
+describe('Extractor resolve & CSV export', () => {
+  let ctx2: { db: AutomationDatabase; server: http.Server; port: number };
+
+  beforeAll(async () => {
+    const db = new AutomationDatabase(':memory:');
+    const runner = new TelegramRunner(db);
+    const scheduler = new AutomationScheduler(db, () => Promise.resolve({ success: true }));
+    const handler = createApiHandler(db, runner, scheduler);
+    const server = http.createServer(async (req, res) => {
+      const handled = await handler(req, res);
+      if (!handled) {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', () => resolve());
+    });
+    ctx2 = { db, server, port: (server.address() as any).port };
+  });
+
+  afterAll(() => {
+    ctx2.db.close();
+    ctx2.server.close();
+  });
+
+  async function api2(path: string, options: RequestInit = {}) {
+    const res = await fetch(`http://127.0.0.1:${ctx2.port}/api/v1/automation/${path}`, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    });
+    const text = await res.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+    return { status: res.status, data, text, headers: res.headers };
+  }
+
+  it('resolve validates input and reports disconnected daemon', async () => {
+    expect((await api2('extract/resolve', { method: 'POST', body: '{}' })).status).toBe(400);
+
+    const badLink = await api2('extract/resolve', {
+      method: 'POST', body: JSON.stringify({ kind: 'invite_link', value: 'example.com/x' }),
+    });
+    expect(badLink.status).toBe(400);
+
+    const offline = await api2('extract/resolve', {
+      method: 'POST', body: JSON.stringify({ kind: 'invite_link', value: 't.me/+ValidHash123' }),
+    });
+    expect(offline.status).toBe(503);
+  });
+
+  it('CSV export escapes quotes/commas and uses ISO dates + BOM', async () => {
+    ctx2.db.upsertExtractedItem({
+      kind: 'invite_link',
+      value: 't.me/+CsvTest',
+      domain: 't.me',
+      sourceChatId: '-1001',
+      sourceChatTitle: 'Grupo "Com, virgula"',
+    });
+    ctx2.db.markExtractedResolved('invite_link', 't.me/+CsvTest', {
+      title: 'Destino "X"',
+      members: 1500,
+      type: 'group',
+      about: 'sobre, com virgula',
+    });
+
+    const res = await api2('extract/export?format=csv');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/csv');
+    const bytes = Buffer.from(await (await fetch(
+      `http://127.0.0.1:${ctx2.port}/api/v1/automation/extract/export?format=csv`,
+    )).arrayBuffer());
+    // UTF-8 BOM so Excel opens the CSV with proper encoding
+    expect(bytes[0]).toBe(0xef);
+    expect(bytes[1]).toBe(0xbb);
+    expect(bytes[2]).toBe(0xbf);
+    expect(res.text).toContain('kind,value,resolved_title');
+    expect(res.text).toContain('"Grupo ""Com, virgula"""');
+    expect(res.text).toContain('"Destino ""X"""');
+    expect(res.text).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+  });
+});

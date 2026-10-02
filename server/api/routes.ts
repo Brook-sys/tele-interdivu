@@ -255,13 +255,42 @@ export function createApiHandler(
       }
 
       if (route === 'extract/export' && method === 'GET') {
-        const items = db.getExtractedItems({
-          kind: parsedUrl.searchParams.get('kind') || undefined,
-          limit: 500,
-        });
+        const kind = parsedUrl.searchParams.get('kind') || undefined; // omitted = all kinds
+        const items = db.getExtractedItems({ kind, limit: 5000 });
+
+        const toIso = (epoch?: number) => (epoch ? new Date(epoch * 1000).toISOString() : '');
+        if (parsedUrl.searchParams.get('format') === 'csv') {
+          const escapeCsv = (v?: string | number) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+          const header = [
+            'kind', 'value', 'resolved_title', 'resolved_members', 'resolved_type',
+            'resolved_about', 'source_chat', 'first_seen', 'last_seen', 'times_seen',
+          ].join(',') + '\n';
+          const lines = items.map((item) => [
+            item.kind,
+            item.value,
+            item.resolvedTitle,
+            item.resolvedMembers,
+            item.resolvedType,
+            item.resolvedAbout,
+            item.sourceChatTitle,
+            toIso(item.firstSeenAt),
+            toIso(item.lastSeenAt),
+            item.timesSeen,
+          ].map(escapeCsv).join(',')).join('\n');
+          const body = `\uFEFF${header}${lines}\n`; // BOM so Excel reads UTF-8
+          res.writeHead(200, {
+            'Content-Type': 'text/csv; charset=utf-8',
+            'Content-Disposition': `attachment; filename="extracted-${kind || 'all'}.csv"`,
+            'Access-Control-Allow-Origin': '*',
+          });
+          res.end(body);
+          return true;
+        }
+
         const body = items.map((item) => item.value).join('\n');
         res.writeHead(200, {
           'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Disposition': `attachment; filename="extracted-${kind || 'all'}.txt"`,
           'Access-Control-Allow-Origin': '*',
         });
         res.end(body);
@@ -273,6 +302,52 @@ export function createApiHandler(
         db.clearExtractedItems(body.kind);
         sendJson(res, 200, { success: true });
         return true;
+      }
+
+      // Resolves an extracted link destination (read-only; invite links only)
+      if (route === 'extract/resolve' && method === 'POST') {
+        const body = await readJsonBody<{ kind?: string; value?: string }>(req);
+        if (!body.value || body.kind !== 'invite_link') {
+          sendError(res, 400, 'kind=invite_link and value are required');
+          return true;
+        }
+
+        const match = body.value.match(/t\.me\/(?:\+|joinchat\/)([A-Za-z0-9_-]+)/);
+        if (!match) {
+          sendError(res, 400, 'Not a resolvable Telegram invite link');
+          return true;
+        }
+
+        if (!runner.getIsConnected()) {
+          sendError(res, 503, 'Daemon is not connected to Telegram right now — try again in a few seconds');
+          return true;
+        }
+
+        try {
+          const resolved = await runner.resolveInviteLink(match[1]);
+          if (!resolved) {
+            sendError(res, 503, 'Daemon not connected');
+            return true;
+          }
+
+          db.markExtractedResolved(body.kind, body.value, {
+            title: resolved.title,
+            members: resolved.members,
+            type: resolved.chatType,
+            photoB64: resolved.photoB64,
+            about: resolved.about,
+          });
+          sendJson(res, 200, { success: true, resolved });
+          return true;
+        } catch (err: any) {
+          const message = String(err?.errorMessage || err?.message || err);
+          if (/INVITE_HASH_EXPIRED|INVITE_HASH_INVALID/.test(message)) {
+            db.markExtractedResolved(body.kind, body.value, { failed: true });
+            sendError(res, 410, 'Convite expirado ou inválido (registrado)');
+            return true;
+          }
+          throw err;
+        }
       }
 
       // 5. GET & POST campaign

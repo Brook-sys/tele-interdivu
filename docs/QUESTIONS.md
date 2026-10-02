@@ -405,3 +405,15 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     BroadcastChannel propaga o modo entre abas — outra aba que recebe o
     sinal re-checa o daemon e entra/sai junto. Botão voltar do browser só
     navega entre as telas do modo; sair exige release explícito.
+
+58. **Upgrade de UX da Extração + resolução de destino sob demanda** — Itens
+    viraram cards interativos: texto selecionável, clique copia (+ botão com
+    feedback "Copiado!"), toggle de ordenação (recentes/mais vistos), exportar
+    TXT/CSV da aba ou CSV completo com todos os tipos (BOM p/ Excel, datas
+    ISO). Botão "ver destino" resolve convites sob demanda via
+    `checkChatInvite` (read-only, sem join): grava `resolved_title`,
+    `resolved_members`, `resolved_type` (grupo/canal), `resolved_about`
+    (vira tooltip, sem inchar o layout) e foto stripped (bytes inline do
+    próprio convite, zero chamadas extras). Convite expirado marca
+    `resolved_failed` e não tenta de novo. Arquitetura do resolver isolada
+    (runner.resolveInviteLink) para futura auto-resolução de convites novos.

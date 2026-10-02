@@ -147,6 +147,31 @@ export interface ExtractedLinkItem {
   firstSeenAt: number;
   lastSeenAt: number;
   timesSeen: number;
+  resolvedTitle?: string;
+  resolvedMembers?: number;
+  resolvedType?: string;
+  resolvedPhotoB64?: string;
+  resolvedAbout?: string;
+  resolvedAt?: number;
+  resolvedFailed?: boolean;
+}
+
+export interface ResolveInviteResult {
+  title: string;
+  members?: number;
+  chatType: string;
+  about?: string;
+  photoB64?: string;
+}
+
+export function resolveExtractedLink(
+  kind: string,
+  value: string,
+): Promise<{ success: boolean; resolved: ResolveInviteResult }> {
+  return request('extract/resolve', {
+    method: 'POST',
+    body: JSON.stringify({ kind, value }),
+  });
 }
 
 export interface ExtractStatsResponse {
@@ -180,10 +205,13 @@ export function clearExtractedLinks(kind?: string): Promise<{ success: boolean }
   });
 }
 
-export async function downloadExtractedLinks(kind?: string): Promise<void> {
+export async function downloadExtractedLinks(kind?: string, format: 'txt' | 'csv' = 'txt'): Promise<void> {
   const token = getApiToken();
-  const qs = kind ? `?kind=${encodeURIComponent(kind)}` : '';
-  const res = await fetch(`/api/v1/automation/extract/export${qs}`, {
+  const params = new URLSearchParams();
+  if (kind) params.set('kind', kind);
+  if (format === 'csv') params.set('format', 'csv');
+  const qs = params.toString();
+  const res = await fetch(`/api/v1/automation/extract/export${qs ? `?${qs}` : ''}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
   if (!res.ok) throw new Error(`HTTP error ${res.status}`);
@@ -192,7 +220,7 @@ export async function downloadExtractedLinks(kind?: string): Promise<void> {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = `extracted-${kind || 'all'}.txt`;
+  anchor.download = `extracted-${kind || 'all'}.${format}`;
   anchor.click();
   URL.revokeObjectURL(url);
 }

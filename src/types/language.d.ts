@@ -2391,6 +2391,18 @@ export interface LangPair {
   'AutomationModeStepDaemon': undefined;
   'AutomationModeStepDisconnect': undefined;
   'AutomationModeStepDone': undefined;
+  'PromoExtractSortRecent': undefined;
+  'PromoExtractSortSeen': undefined;
+  'PromoExtractExportTxt': undefined;
+  'PromoExtractExportCsv': undefined;
+  'PromoExtractExportCsvAll': undefined;
+  'PromoExtractClickToCopy': undefined;
+  'PromoExtractCopy': undefined;
+  'PromoExtractResolve': undefined;
+  'PromoExtractCopied': undefined;
+  'PromoExtractInviteInvalid': undefined;
+  'PromoExtractTypeChannel': undefined;
+  'PromoExtractTypeGroup': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4646,6 +4658,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'PromoOrchestrationGroupsCount': {
+    'count': V;
+  };
+  'PromoExtractMembers': {
     'count': V;
   };
 }

@@ -125,3 +125,77 @@
   color: var(--color-text-secondary);
   text-align: center;
 }
+
+.linkRow {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.linkValue {
+  cursor: copy;
+  user-select: text;
+  flex: 1;
+}
+
+.linkActions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.125rem;
+}
+
+.copiedHint {
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  color: var(--color-green);
+}
+
+.resolvedCard {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  margin-top: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  border-left: 2px solid var(--color-primary);
+  border-radius: 0.375rem;
+
+  background: var(--color-background);
+}
+
+.resolvedPhoto {
+  flex-shrink: 0;
+
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+
+  object-fit: cover;
+}
+
+.resolvedText {
+  min-width: 0;
+}
+
+.resolvedTitle {
+  overflow: hidden;
+
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resolvedMeta {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.resolvedFailed {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--color-danger);
+}

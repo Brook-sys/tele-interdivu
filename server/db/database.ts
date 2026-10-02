@@ -68,6 +68,14 @@ export interface ExtractedItemRecord {
   firstSeenAt: number;
   lastSeenAt: number;
   timesSeen: number;
+  resolvedTitle?: string;
+  resolvedMembers?: number;
+  resolvedType?: string;
+  resolvedPhotoB64?: string;
+  resolvedAbout?: string;
+  resolvedAt?: number;
+  // True when the invite was checked and is invalid/expired
+  resolvedFailed?: boolean;
 }
 
 export const DEFAULT_CONFIG: AutomationDbConfig = {
@@ -187,6 +195,13 @@ export class AutomationDatabase {
         first_seen_at INTEGER NOT NULL,
         last_seen_at INTEGER NOT NULL,
         times_seen INTEGER NOT NULL DEFAULT 1,
+        resolved_title TEXT,
+        resolved_members INTEGER,
+        resolved_type TEXT,
+        resolved_photo_b64 TEXT,
+        resolved_about TEXT,
+        resolved_at INTEGER,
+        resolved_failed INTEGER,
         UNIQUE(kind, value)
       );
 
@@ -268,6 +283,22 @@ export class AutomationDatabase {
       this.db.exec('ALTER TABLE config ADD COLUMN extractor_enabled INTEGER NOT NULL DEFAULT 1');
     } catch {
       // Column already exists
+    }
+
+    for (const ddl of [
+      'ALTER TABLE extracted_items ADD COLUMN resolved_title TEXT',
+      'ALTER TABLE extracted_items ADD COLUMN resolved_members INTEGER',
+      'ALTER TABLE extracted_items ADD COLUMN resolved_type TEXT',
+      'ALTER TABLE extracted_items ADD COLUMN resolved_photo_b64 TEXT',
+      'ALTER TABLE extracted_items ADD COLUMN resolved_about TEXT',
+      'ALTER TABLE extracted_items ADD COLUMN resolved_at INTEGER',
+      'ALTER TABLE extracted_items ADD COLUMN resolved_failed INTEGER',
+    ]) {
+      try {
+        this.db.exec(ddl);
+      } catch {
+        // Column already exists
+      }
     }
 
     // Auto-quarantine any groups that previously failed with ALLOW_PAYMENT_REQUIRED
@@ -684,6 +715,14 @@ export class AutomationDatabase {
       firstSeenAt: Number(row.first_seen_at),
       lastSeenAt: Number(row.last_seen_at),
       timesSeen: Number(row.times_seen),
+      resolvedTitle: row.resolved_title ? String(row.resolved_title) : undefined,
+      resolvedMembers: row.resolved_members !== null && row.resolved_members !== undefined
+        ? Number(row.resolved_members) : undefined,
+      resolvedType: row.resolved_type ? String(row.resolved_type) : undefined,
+      resolvedPhotoB64: row.resolved_photo_b64 ? String(row.resolved_photo_b64) : undefined,
+      resolvedAbout: row.resolved_about ? String(row.resolved_about) : undefined,
+      resolvedAt: row.resolved_at ? Number(row.resolved_at) : undefined,
+      resolvedFailed: Boolean(row.resolved_failed),
     }));
   }
 
@@ -704,6 +743,43 @@ export class AutomationDatabase {
       last24h: Number(row.last_24h || 0),
       sourceChats: Number(row.source_chats),
     }));
+  }
+
+  // Records a successful invite resolution (or a confirmed invalid invite)
+  markExtractedResolved(
+    kind: string,
+    value: string,
+    resolved: {
+      title?: string;
+      members?: number;
+      type?: string;
+      photoB64?: string;
+      about?: string;
+      failed?: boolean;
+    },
+  ) {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare(`
+      UPDATE extracted_items SET
+        resolved_title = ?,
+        resolved_members = ?,
+        resolved_type = ?,
+        resolved_photo_b64 = ?,
+        resolved_about = ?,
+        resolved_at = ?,
+        resolved_failed = ?
+      WHERE kind = ? AND value = ?
+    `).run(
+      resolved.title ?? null,
+      resolved.members ?? null,
+      resolved.type ?? null,
+      resolved.photoB64 ?? null,
+      resolved.about ?? null,
+      now,
+      resolved.failed ? 1 : 0,
+      kind,
+      value,
+    );
   }
 
   clearExtractedItems(kind?: string) {
