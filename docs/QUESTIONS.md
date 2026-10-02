@@ -360,3 +360,16 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     (verificada via contador local/GetHistory cacheado); quem falta mensagem
     cai em WAITING_MESSAGES, então o status exibido reflete o que realmente
     impede o próximo envio.
+
+54. **Grupos quarentenados nunca reavaliados (starvation da sondagem)** — Três
+    bugs combinados esvaziavam a fila: (1) a revalidação ordenava por
+    `updatedAt`, mas sondagens sem mudança não atualizavam nada — os mesmos
+    10 quarentenados monopolizavam todo ciclo e o resto nunca era checado;
+    (2) se todos os grupos virassem quarentena o scheduler parava, matando a
+    própria revalidação; (3) classificação de estrelas vinda do takeover
+    (potencialmente cache velho do frontend) virava quarentena sem prova.
+    Fix: ordem de sondagem justa via `lastProbeAtByChat` em memória; ciclo de
+    catch-up de 60s enquanto houver grupo nunca sondado no processo; com
+    tudo em quarentena o loop fica vivo sondando; ciclo registra resumo no
+    histórico ("X sondados, Y reintegrados"). Classificação do takeover agora
+    é tratada como provisória — a sondagem do backend é a fonte da verdade.

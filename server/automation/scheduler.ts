@@ -141,6 +141,10 @@ type ProbeChatCallback = (chatId: string) => Promise<ChatProbeResult | undefined
 
 const REVALIDATE_INTERVAL_MS = 30 * 60_000;
 const REVALIDATE_BATCH_SIZE = 10;
+// While some quarantined group has not been probed in this process yet,
+// probe faster so stale classifications (e.g. from cached frontend state)
+// are corrected within minutes instead of hours
+const REVALIDATE_CATCHUP_INTERVAL_MS = 60_000;
 
 export class AutomationScheduler {
   private state: SchedulerState = {
@@ -168,6 +172,8 @@ export class AutomationScheduler {
   ) {}
 
   private lastRevalidateAt = 0;
+
+  private lastProbeAtByChat = new Map<string, number>();
 
   private waitStartMs?: number;
 
@@ -366,23 +372,35 @@ export class AutomationScheduler {
 
   // Periodically probes quarantined groups (STARS/BLOCKED) with read-only
   // API calls and reintegrates the ones that became free again.
+  // Probing order is fair: groups not yet probed (or probed longest ago) go
+  // first, so a growing quarantine list can never starve its tail.
   private async revalidateQuarantinedGroups(signal: AbortSignal) {
     if (!this.probeChatCallback) return;
 
+    const quarantinedAll = this.db.getAllGroupStates()
+      .filter((g) => g.status === 'STARS' || g.status === 'BLOCKED');
+    if (!quarantinedAll.length) return;
+
     const now = Date.now();
-    if (now - this.lastRevalidateAt < REVALIDATE_INTERVAL_MS) return;
+    const allProbedOnce = quarantinedAll.every((g) => this.lastProbeAtByChat.has(g.chatId));
+    const interval = allProbedOnce ? REVALIDATE_INTERVAL_MS : REVALIDATE_CATCHUP_INTERVAL_MS;
+    if (now - this.lastRevalidateAt < interval) return;
     this.lastRevalidateAt = now;
 
-    const quarantined = this.db.getAllGroupStates()
-      .filter((g) => g.status === 'STARS' || g.status === 'BLOCKED')
-      .sort((a, b) => a.updatedAt - b.updatedAt)
+    const quarantined = quarantinedAll
+      .sort((a, b) => (this.lastProbeAtByChat.get(a.chatId) || 0) - (this.lastProbeAtByChat.get(b.chatId) || 0))
       .slice(0, REVALIDATE_BATCH_SIZE);
+
+    let probedCount = 0;
+    let reintegratedCount = 0;
 
     for (const g of quarantined) {
       if (signal.aborted) return;
 
+      this.lastProbeAtByChat.set(g.chatId, now);
       const probe = await this.probeChatCallback(g.chatId);
       if (!probe) continue;
+      probedCount++;
 
       const serverNow = Math.floor(Date.now() / 1000);
 
@@ -438,6 +456,23 @@ export class AutomationScheduler {
         chatId: g.chatId,
         chatTitle: g.title,
         messageSnippet: `Grupo "${g.title}" deixou de cobrar estrelas/bloquear e foi reintegrado à fila.`,
+        linkUsed: '',
+        status: 'SKIPPED',
+      });
+      reintegratedCount++;
+    }
+
+    if (probedCount > 0) {
+      const remainingUnprobed = quarantinedAll.filter(
+        (g) => !this.lastProbeAtByChat.has(g.chatId),
+      ).length;
+      this.db.addLog({
+        createdAt: Math.floor(Date.now() / 1000),
+        chatId: 'system',
+        chatTitle: 'Sistema de Automação',
+        messageSnippet: `Revalidação de quarentena: ${probedCount} grupo(s) sondado(s), `
+          + `${reintegratedCount} reintegrado(s)`
+          + (remainingUnprobed ? `, ${remainingUnprobed} aguardando 1ª sondagem.` : '.'),
         linkUsed: '',
         status: 'SKIPPED',
       });
@@ -546,6 +581,27 @@ export class AutomationScheduler {
         ));
 
         if (validGroups.length === 0) {
+          const quarantinedCount = this.db.getAllGroupStates()
+            .filter((g) => g.status === 'STARS' || g.status === 'BLOCKED').length;
+
+          if (quarantinedCount > 0) {
+            // Everything is quarantined: keep the loop alive so revalidation
+            // (step 1b) can reintegrate groups that stopped charging/blocking
+            this.logWaitTransitionOnce(
+              'QUARANTINED',
+              `Todos os ${quarantinedCount} grupos estão em quarentena. `
+              + 'Revalidando em ciclo rápido até algum ficar livre…',
+              serverNow,
+            );
+            this.lastRevalidateAt = 0;
+            this.state.status = 'WAITING_MESSAGES';
+            this.state.waitingReason = 'Todos os grupos em quarentena — revalidando';
+            await this.sleep(REVALIDATE_CATCHUP_INTERVAL_MS, signal);
+            this.state.waitingReason = undefined;
+            this.state.status = 'RUNNING';
+            continue;
+          }
+
           this.state.lastRunError = 'Nenhum grupo válido configurado na pasta';
           this.state.status = 'STOPPED';
           break;
