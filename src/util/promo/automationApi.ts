@@ -272,3 +272,70 @@ export function reconnectAutomationTelegram(): Promise<{ success: boolean; messa
     method: 'POST',
   });
 }
+
+// ---- Orchestration (master-only endpoints; 404/missing on workers) ----
+
+export interface OrchestratorInfo {
+  isMaster: boolean;
+  workerId: string;
+  configuredWorkers: number;
+  aliveWorkers: number;
+  degradedWorkers: number;
+  totalTodaySent: number;
+  aliveWorkerIds: string[];
+}
+
+export interface OrchestratorWorker {
+  workerId: string;
+  apiUrl: string;
+  groups: string[];
+  version?: string;
+  statusSnapshot?: {
+    scheduler?: { status?: string; activeRound?: number; sentInRoundCount?: number };
+    todaySent?: number;
+    isDegraded?: boolean;
+  };
+  metaTarget?: number;
+  lastHeartbeatAt: number;
+  isAlive?: boolean;
+}
+
+export interface OrchestratorGrant {
+  id: number;
+  chatId: string;
+  chatTitle: string;
+  workerId: string;
+  grantedAt: number;
+  lockUntil: number;
+  result?: string;
+}
+
+async function requestOrchestrator<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const token = getApiToken();
+  const res = await fetch(`/api/v1/orchestrator/${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+  return res.json();
+}
+
+export async function fetchOrchestratorInfo(): Promise<OrchestratorInfo | undefined> {
+  try {
+    return await requestOrchestrator<OrchestratorInfo>('info');
+  } catch {
+    return undefined;
+  }
+}
+
+export function fetchOrchestratorWorkers(): Promise<OrchestratorWorker[]> {
+  return requestOrchestrator<OrchestratorWorker[]>('workers');
+}
+
+export function fetchOrchestratorGrants(limit = 100): Promise<OrchestratorGrant[]> {
+  return requestOrchestrator<OrchestratorGrant[]>(`grants?limit=${limit}`);
+}

@@ -323,3 +323,20 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     lateral com stats, abas por tipo, busca, exportação .txt e limpeza.
     Arquitetura preparada para novos extratores (telefone, @username,
     palavras-chave) — basta adicionar um extrator ao pipeline.
+
+51. **Orquestração multi-conta (fase 1)** — Mesma imagem, papel definido por
+    `NODE_ROLE` (padrão `worker`). Master expõe `/api/v1/orchestrator/*`
+    (404 em workers): `info`, `workers`, `register`, `heartbeat` (push de
+    `desiredConfig` + `desiredCampaign` centralizados), `claim`, `report`,
+    `grants`. Coordenador decide o slot por timeline global por grupo
+    (cooldown compartilhado entre contas), lease com TTL de 90s, round-robin
+    por último grant (intercalação natural de contas), cooldown global de
+    grupo após flood reportado e quarentena global para stars/blocked.
+    Workers chamam `OrchestratorWorkerClient` (register + heartbeat a cada
+    15s + claim antes de cada envio + report depois); falha de rede cai em
+    modo degradado = sistema standalone atual (o escalonamento prévio dos
+    `lastSentAt` por conta mantém a intercalação residual). Metas de rodada
+    são rebalanceadas por worker vivo. Painel "Orquestração" visível em
+    qualquer container: no master mostra contas (status, metas, hb) e feed
+    de grants; em workers exibe aviso. Env novos: NODE_ROLE, MASTER_URL,
+    WORKER_ID, WORKER_API_URL, ORCHESTRATOR_TOKEN.

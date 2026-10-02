@@ -18,6 +18,12 @@ services:
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?Set TELEGRAM_API_HASH in .env}
       # Dedicated proxy for multi-account isolation (supports socks5:// or http://)
       PROXY_URL: ${PROXY_URL:-}
+      # Orchestration (single image; one container runs with NODE_ROLE=master)
+      NODE_ROLE: ${NODE_ROLE:-worker}
+      MASTER_URL: ${MASTER_URL:-}
+      WORKER_ID: ${WORKER_ID:-}
+      WORKER_API_URL: ${WORKER_API_URL:-}
+      ORCHESTRATOR_TOKEN: ${ORCHESTRATOR_TOKEN:-}
     volumes:
       - tele-data:/data
     ports:

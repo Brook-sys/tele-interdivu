@@ -145,6 +145,7 @@ export class AutomationScheduler {
     private readonly sendCallback: SendCallback,
     private readonly checkMessagesCallback?: CheckMessagesCallback,
     private readonly probeChatCallback?: ProbeChatCallback,
+    private readonly orchestratorClient?: OrchestratorWorkerClient,
   ) {}
 
   private lastRevalidateAt = 0;
@@ -628,6 +629,21 @@ export class AutomationScheduler {
         this.state.currentChatId = eligibleGroup.chatId;
         this.state.currentChatTitle = eligibleGroup.title;
 
+        // Orchestrator claim: when orchestrated, only the slot owner may send.
+        // Degraded mode (master unreachable) falls back to local sending.
+        if (this.orchestratorClient) {
+          const claim = await this.orchestratorClient.claimSendSlot(eligibleGroup.chatId, eligibleGroup.title);
+          if (claim && !claim.granted) {
+            this.state.status = 'WAITING_COOLDOWN';
+            this.state.waitingReason = 'Aguardando slot global do orquestrador';
+            const waitMs = Math.min(Math.max(5, (claim.retryAfterMs || 15_000) / 1000), 30) * 1000;
+            await this.sleep(waitMs, signal);
+            this.state.waitingReason = undefined;
+            this.state.status = 'RUNNING';
+            continue;
+          }
+        }
+
         // Pacing delay with jitter BEFORE sending
         const delayMs = calculateJitterDelayMs(config.minDelaySeconds, config.maxDelaySeconds);
         this.state.nextRunAt = Date.now() + delayMs;
@@ -638,6 +654,20 @@ export class AutomationScheduler {
         const sendResult = await this.sendCallback(eligibleGroup.chatId, messageText, linkUsed);
 
         const timestamp = Math.floor(Date.now() / 1000);
+
+        if (this.orchestratorClient) {
+          const reportResult: OrchestratorSendResult = sendResult.success
+            ? 'success'
+            : sendResult.isPaymentRequired
+              ? 'stars'
+              : sendResult.slowmodeSeconds
+                ? 'slowmode'
+                : sendResult.floodWaitSeconds
+                  ? 'flood'
+                  : /CHAT_WRITE_FORBIDDEN|USER_BANNED_IN_CHANNEL|CHANNEL_PRIVATE|CHAT_RESTRICTED/
+                    .test(sendResult.error || '') ? 'blocked' : 'error';
+          void this.orchestratorClient.reportSendResult(eligibleGroup.chatId, reportResult);
+        }
 
         if (sendResult.success) {
           this.state.consecutiveFloodWaits = 0;

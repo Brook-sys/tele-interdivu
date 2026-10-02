@@ -37,6 +37,7 @@ import NewChat from './newChat/NewChat.async';
 import PromoAutomation from './promo/PromoAutomation';
 import PromoExtract from './promo/PromoExtract';
 import PromoManageGroups from './promo/PromoManageGroups';
+import PromoOrchestration from './promo/PromoOrchestration';
 import PromoPanel from './promo/PromoPanel';
 import Settings from './settings/Settings.async';
 
@@ -85,9 +86,14 @@ enum ContentType {
 
   PromoManage,
 
+  // eslint-disable-next-line @typescript-eslint/no-shadow
   PromoAutomation,
 
+  // eslint-disable-next-line @typescript-eslint/no-shadow
   PromoExtract,
+
+  // eslint-disable-next-line @typescript-eslint/no-shadow
+  PromoOrchestration,
 }
 
 const RENDER_COUNT = Object.keys(ContentType).length / 2;
@@ -163,6 +169,9 @@ function LeftColumn({
       break;
     case LeftColumnContent.PromoExtract:
       contentType = ContentType.PromoExtract;
+      break;
+    case LeftColumnContent.PromoOrchestration:
+      contentType = ContentType.PromoOrchestration;
       break;
   }
 
@@ -591,6 +600,13 @@ function LeftColumn({
       case ContentType.PromoExtract:
         return (
           <PromoExtract
+            isActive={isActive}
+            onReset={handleReset}
+          />
+        );
+      case ContentType.PromoOrchestration:
+        return (
+          <PromoOrchestration
             isActive={isActive}
             onReset={handleReset}
           />

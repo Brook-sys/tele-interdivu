@@ -71,6 +71,10 @@ const LeftSideMenuDropdown = ({
     openLeftColumnContent({ contentKey: LeftColumnContent.PromoExtract });
   });
 
+  const handleSelectPromoOrchestration = useLastCallback(() => {
+    openLeftColumnContent({ contentKey: LeftColumnContent.PromoOrchestration });
+  });
+
   return (
     <DropdownMenu
       trigger={trigger}
@@ -96,6 +100,7 @@ const LeftSideMenuDropdown = ({
         onSelectPromoManage={handleSelectPromoManage}
         onSelectPromoAutomation={handleSelectPromoAutomation}
         onSelectPromoExtract={handleSelectPromoExtract}
+        onSelectPromoOrchestration={handleSelectPromoOrchestration}
         onBotMenuOpened={markBotMenuOpen}
         onBotMenuClosed={unmarkBotMenuOpen}
         footer={`${APP_NAME} ${versionString}`}

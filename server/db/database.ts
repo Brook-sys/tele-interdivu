@@ -191,6 +191,29 @@ export class AutomationDatabase {
       );
 
       CREATE INDEX IF NOT EXISTS idx_extracted_kind_seen ON extracted_items(kind, last_seen_at DESC);
+
+      CREATE TABLE IF NOT EXISTS orchestrator_workers (
+        worker_id TEXT PRIMARY KEY,
+        api_url TEXT NOT NULL,
+        groups_json TEXT NOT NULL,
+        version TEXT,
+        status_snapshot_json TEXT,
+        meta_target INTEGER,
+        last_heartbeat_at INTEGER,
+        registered_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS orchestrator_grants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT NOT NULL,
+        chat_title TEXT NOT NULL,
+        worker_id TEXT NOT NULL,
+        granted_at INTEGER NOT NULL,
+        lock_until INTEGER NOT NULL,
+        result TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_grants_chat ON orchestrator_grants(chat_id, granted_at DESC);
     `);
 
     // Migrations for existing databases: ensure new columns exist
@@ -698,6 +721,11 @@ export class AutomationDatabase {
       WHERE created_at >= ? AND status = 'SUCCESS'
     `).get(since) as any;
     return row ? Number(row.count) : 0;
+  }
+
+  // Raw accessor for modules with custom aggregates (e.g. orchestrator)
+  rawDb(): DatabaseSync {
+    return this.db;
   }
 
   close() {

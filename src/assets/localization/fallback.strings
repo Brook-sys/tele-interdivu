@@ -3217,3 +3217,14 @@
 "PromoExtractEmpty" = "Nenhum link extraído ainda. O extrator coleta automaticamente as mensagens novas dos grupos da automação enquanto ela estiver ativa.";
 "PromoExtractTimesSeen_one" = "visto {count} vez";
 "PromoExtractTimesSeen_other" = "visto {count} vezes";
+"PromoOrchestrationTitle" = "Orquestração";
+"PromoOrchestrationNotMaster" = "Este container está em modo worker. O painel de orquestração existe apenas no container master (NODE_ROLE=master).";
+"PromoOrchestrationWorkers" = "Contas online";
+"PromoOrchestrationTodayTotal" = "Envios 24h (rede)";
+"PromoOrchestrationDegraded" = "Degradadas";
+"PromoOrchestrationAccounts" = "Contas";
+"PromoOrchestrationNoWorkers" = "Nenhuma conta registrada ainda. Workers chamam register/heartbeat assim que o daemon sobe com MASTER_URL configurada.";
+"PromoOrchestrationGroupsCount_one" = "{count} grupo";
+"PromoOrchestrationGroupsCount_other" = "{count} grupos";
+"PromoOrchestrationGrantsFeed" = "Intercalação (grants)";
+"PromoOrchestrationNoGrants" = "Nenhum envio orquestrado ainda.";

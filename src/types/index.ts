@@ -312,6 +312,7 @@ export enum LeftColumnContent {
   PromoManage,
   PromoAutomation,
   PromoExtract,
+  PromoOrchestration,
 }
 
 export enum GlobalSearchContent {

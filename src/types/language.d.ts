@@ -2373,6 +2373,15 @@ export interface LangPair {
   'PromoExtractExport': undefined;
   'PromoExtractClear': undefined;
   'PromoExtractEmpty': undefined;
+  'PromoOrchestrationTitle': undefined;
+  'PromoOrchestrationNotMaster': undefined;
+  'PromoOrchestrationWorkers': undefined;
+  'PromoOrchestrationTodayTotal': undefined;
+  'PromoOrchestrationDegraded': undefined;
+  'PromoOrchestrationAccounts': undefined;
+  'PromoOrchestrationNoWorkers': undefined;
+  'PromoOrchestrationGrantsFeed': undefined;
+  'PromoOrchestrationNoGrants': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4625,6 +4634,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'PromoExtractTimesSeen': {
+    'count': V;
+  };
+  'PromoOrchestrationGroupsCount': {
     'count': V;
   };
 }

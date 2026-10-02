@@ -203,7 +203,6 @@ describe('Automation REST API routes', () => {
   });
 });
 
-
 describe('Extractor REST API', () => {
   let exServer: http.Server;
   let exPort: number;

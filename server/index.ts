@@ -2,25 +2,36 @@ import './polyfills';
 
 import http from 'node:http';
 
-import { createApiHandler } from './api/routes';
+import { createOrchestratorHandler } from './api/orchestratorRoutes';
 import { AutomationScheduler } from './automation/scheduler';
 import { TelegramRunner } from './automation/telegramRunner';
 import { AutomationDatabase } from './db/database';
+import { OrchestratorCoordinator } from './orchestrator/coordinator';
+import { OrchestratorWorkerClient } from './orchestrator/workerClient';
 import { handleWsRelay } from './proxy/wsRelay';
 
 const PORT = Number(process.env.AUTOMATION_PORT) || 3000;
 const PROXY_URL = process.env.PROXY_URL;
+const NODE_ROLE = process.env.NODE_ROLE || 'worker';
+const WORKER_ID = process.env.WORKER_ID || process.env.HOSTNAME || 'master';
 
 const db = new AutomationDatabase();
 const runner = new TelegramRunner(db, PORT);
+const workerClient = OrchestratorWorkerClient.fromEnv(db);
 const scheduler = new AutomationScheduler(
   db,
   (chatId, text) => runner.sendMessage(chatId, text),
   (chatId, minRequired) => runner.checkOtherMessagesCount(chatId, minRequired),
   (chatId) => runner.probeChat(chatId),
+  workerClient,
 );
 
-const apiHandler = createApiHandler(db, runner, scheduler);
+const coordinator = new OrchestratorCoordinator(db);
+
+const apiHandler = createOrchestratorHandler(db, runner, scheduler, coordinator, {
+  isMaster: NODE_ROLE === 'master',
+  workerId: WORKER_ID,
+});
 
 const server = http.createServer(async (req, res) => {
   const handled = await apiHandler(req, res);
@@ -42,17 +53,24 @@ server.on('upgrade', (req, clientSocket, head) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   // eslint-disable-next-line no-console
-  console.log(`[Interdivu Automation Daemon] Listening on 127.0.0.1:${PORT}`);
+  console.log(`[Interdivu Automation Daemon] Listening on 127.0.0.1:${PORT} (role: ${NODE_ROLE})`);
   if (PROXY_URL) {
     // eslint-disable-next-line no-console
     console.log(`[Interdivu Proxy] Active PROXY_URL: ${PROXY_URL.replace(/:[^:@]+@/, ':***@')}`);
   }
+
+  workerClient?.startHeartbeatLoop(() => ({
+    scheduler: scheduler.getState(),
+    todaySent: db.getTodaySentCount(Math.floor(Date.now() / 1000)),
+    isDegraded: workerClient.getIsDegraded(),
+  }));
 });
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   // eslint-disable-next-line no-console
   console.log('[Interdivu] Shutting down daemon...');
+  workerClient?.stopHeartbeatLoop();
   scheduler.stop();
   await runner.stop();
   db.close();

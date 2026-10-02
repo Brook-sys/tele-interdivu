@@ -2,10 +2,9 @@ import type { AutomationDatabase } from '../db/database';
 
 import { TELEGRAM_API_HASH, TELEGRAM_API_ID } from '../../src/config';
 import { Api as GramJs, errors, sessions } from '../../src/lib/gramjs';
+import { extractLinks } from './extractors/links';
 
 import TelegramClient from '../../src/lib/gramjs/client/TelegramClient';
-
-import { extractLinks } from './extractors/links';
 import { setProxyRelayOrigin } from '../../src/lib/gramjs/extensions/PromisedWebSockets';
 
 export interface TargetChatInfo {

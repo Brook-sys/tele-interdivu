@@ -50,6 +50,12 @@ ENV TELEGRAM_API_ID=""
 ENV TELEGRAM_API_HASH=""
 ENV PROXY_URL=""
 ENV AUTOMATION_PORT="3000"
+# Orchestration: worker by default; set NODE_ROLE=master on one container only
+ENV NODE_ROLE="worker"
+ENV MASTER_URL=""
+ENV WORKER_ID=""
+ENV WORKER_API_URL=""
+ENV ORCHESTRATOR_TOKEN=""
 
 VOLUME ["/data"]
 
