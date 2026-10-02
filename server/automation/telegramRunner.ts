@@ -389,6 +389,7 @@ export class TelegramRunner {
   ): Promise<{
     success: boolean;
     isPaymentRequired?: boolean;
+    isSessionLost?: boolean;
     slowmodeSeconds?: number;
     floodWaitSeconds?: number;
     error?: string;
@@ -431,6 +432,12 @@ export class TelegramRunner {
       return { success: true };
     } catch (err: any) {
       const message = String(err?.message || err);
+
+      // Session lost to another client (e.g. the web app took over again):
+      // inform the scheduler to stop instead of retrying forever
+      if (/AUTH_KEY_DUPLICATED|AUTH_KEY_UNREGISTERED|SESSION_REVOKED|USER_DEACTIVATED/.test(message)) {
+        return { success: false, isSessionLost: true, error: message };
+      }
 
       if (/ALLOW_PAYMENT_REQUIRED/.test(message)) {
         const match = message.match(/ALLOW_PAYMENT_REQUIRED_(\d+)/);

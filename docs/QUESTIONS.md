@@ -373,3 +373,11 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     tudo em quarentena o loop fica vivo sondando; ciclo registra resumo no
     histórico ("X sondados, Y reintegrados"). Classificação do takeover agora
     é tratada como provisória — a sondagem do backend é a fonte da verdade.
+
+55. **Sessão perdida virava sequência infinita de ERRORs iguais** — Quando o
+    webapp abria no navegador, o Telegram desconectava o daemon com
+    AUTH_KEY_DUPLICATED e o scheduler continuava tentando enviar, gerando o
+    mesmo erro em loop até parar por outros motivos. Fix: erros de sessão
+    (AUTH_KEY_DUPLICATED / AUTH_KEY_UNREGISTERED / SESSION_REVOKED /
+    USER_DEACTIVATED) retornam `isSessionLost`, o scheduler registra um log
+    explicativo e para limpo — retomada via painel ou `POST takeover {}`.

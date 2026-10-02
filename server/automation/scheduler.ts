@@ -130,6 +130,7 @@ export function evaluateGroupEligibility(
 interface SendResult {
   success: boolean;
   isPaymentRequired?: boolean;
+  isSessionLost?: boolean;
   slowmodeSeconds?: number;
   floodWaitSeconds?: number;
   error?: string;
@@ -770,8 +771,26 @@ export class AutomationScheduler {
                 : sendResult.floodWaitSeconds
                   ? 'flood'
                   : /CHAT_WRITE_FORBIDDEN|USER_BANNED_IN_CHANNEL|CHANNEL_PRIVATE|CHAT_RESTRICTED/
-                    .test(sendResult.error || '') ? 'blocked' : 'error';
+                    .test(sendResult.error || '')
+                    ? 'blocked'
+                    : 'error';
           void this.orchestratorClient.reportSendResult(eligibleGroup.chatId, reportResult);
+        }
+
+        if (sendResult.isSessionLost) {
+          this.db.addLog({
+            createdAt: timestamp,
+            chatId: 'system',
+            chatTitle: 'Sistema de Automação',
+            messageSnippet: 'Sessão perdida (outro cliente assumiu — ex.: o webapp foi aberto). '
+              + 'Automação parada; inicie de novo pelo painel ou via takeover remoto.',
+            linkUsed: '',
+            status: 'ERROR',
+            details: sendResult.error,
+          });
+          this.state.lastRunError = sendResult.error;
+          this.state.status = 'STOPPED';
+          break;
         }
 
         if (sendResult.success) {
