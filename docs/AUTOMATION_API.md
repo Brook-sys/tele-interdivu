@@ -178,3 +178,37 @@ messages already flow through the update handler.
 | POST | `extract/clear` | `{ kind?: string }` — clears one kind or everything. |
 
 Toggle globally via `POST /config` with `{ "extractorEnabled": true|false }`.
+
+## Multi-account orchestration
+
+One image, roles by env. Exactly one container runs as master:
+
+```yaml
+# master service (in addition to being a full worker)
+environment:
+  NODE_ROLE: master
+  WORKER_ID: master-1
+
+# each additional account container
+environment:
+  NODE_ROLE: worker
+  WORKER_ID: worker-2
+  MASTER_URL: http://<master-host>/            # internal docker network
+  WORKER_API_URL: http://<worker-host>/        # how the master reaches it (display/proxy actions)
+  ORCHESTRATOR_TOKEN: "shared-secret"
+```
+
+- Workers register + heartbeat every 15s (sending their group list + status);
+  the master pushes the centralized config + campaign in the response, so
+  editing config on the master propagates to every account automatically,
+  and round targets are rebalanced acrossalive workers.
+- Before every send the worker claims a global per-group slot
+  (`POST /api/v1/orchestrator/claim`); the master interleaves accounts by
+  oldest last-grant and enforces a shared per-group cooldown. Stars/blocked
+  reports quarantine the group globally for all workers.
+- If the master is unreachable, workers switch to degraded mode: they keep
+  sending standalone (previous interleaving offsets persist per account) and
+  rejoin automatically.
+- Panel: "Orquestração" in the side menu (workers show a hint instead).
+- Endpoints (master only): `GET info`, `GET workers`, `DELETE workers?workerId=`,
+  `GET grants?limit=`, `POST register|heartbeat|claim|report`.
