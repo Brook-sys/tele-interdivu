@@ -355,8 +355,17 @@ export class TelegramRunner {
         ) as any;
         const fullChat = result?.fullChat;
 
+        // Pre-flight write check: no point trying to send when the channel
+        // itself says we cannot (left the group, personally banned from
+        // writing, or the group is locked for non-admins)
+        const channelObj = (result?.chats || []).find((chat: any) => chat?.className === 'Channel')
+          || (result?.chats || [])[0];
+        const cannotWrite = Boolean(channelObj?.left)
+          || channelObj?.bannedRights?.sendMessages === true
+          || channelObj?.defaultBannedRights?.sendMessages === true;
+
         return {
-          canWrite: true,
+          canWrite: !cannotWrite,
           starsCost: Number(fullChat?.sendPaidMessagesStars || 0),
           slowmodeSeconds: Number(fullChat?.slowmodeSeconds || 0),
         };

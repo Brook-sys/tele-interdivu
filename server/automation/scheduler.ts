@@ -371,31 +371,38 @@ export class AutomationScheduler {
     });
   }
 
-  // Periodically probes quarantined groups (STARS/BLOCKED) with read-only
-  // API calls and reintegrates the ones that became free again.
-  // Probing order is fair: groups not yet probed (or probed longest ago) go
-  // first, so a growing quarantine list can never starve its tail.
+  // Periodically probes groups with read-only API calls. Two scopes:
+  // (a) every group is probed once per process (startup sweep — catches
+  //     write-forbidden/stars groups before any send is attempted);
+  // (b) quarantined groups are re-probed every 30 min to detect groups that
+  //     stopped charging/blocking. Probe order is fair (least-recently-probed
+  //     first) so no group can starve the queue.
   private async revalidateQuarantinedGroups(signal: AbortSignal) {
     if (!this.probeChatCallback) return;
 
-    const quarantinedAll = this.db.getAllGroupStates()
-      .filter((g) => g.status === 'STARS' || g.status === 'BLOCKED');
-    if (!quarantinedAll.length) return;
-
+    const allGroups = this.db.getAllGroupStates();
     const now = Date.now();
-    const allProbedOnce = quarantinedAll.every((g) => this.lastProbeAtByChat.has(g.chatId));
-    const interval = allProbedOnce ? REVALIDATE_INTERVAL_MS : REVALIDATE_CATCHUP_INTERVAL_MS;
+
+    const quarantined = allGroups.filter((g) => g.status === 'STARS' || g.status === 'BLOCKED');
+    const unprobed = allGroups.filter((g) => !this.lastProbeAtByChat.has(g.chatId));
+    if (!quarantined.length && !unprobed.length) return;
+
+    const interval = unprobed.length ? REVALIDATE_CATCHUP_INTERVAL_MS : REVALIDATE_INTERVAL_MS;
     if (now - this.lastRevalidateAt < interval) return;
     this.lastRevalidateAt = now;
 
-    const quarantined = quarantinedAll
+    const targetById = new Map<string, GroupStateRecord>();
+    for (const g of quarantined) targetById.set(g.chatId, g);
+    for (const g of unprobed) targetById.set(g.chatId, g);
+
+    const queue = [...targetById.values()]
       .sort((a, b) => (this.lastProbeAtByChat.get(a.chatId) || 0) - (this.lastProbeAtByChat.get(b.chatId) || 0))
       .slice(0, REVALIDATE_BATCH_SIZE);
 
     let probedCount = 0;
     let reintegratedCount = 0;
 
-    for (const g of quarantined) {
+    for (const g of queue) {
       if (signal.aborted) return;
 
       this.lastProbeAtByChat.set(g.chatId, now);
@@ -418,12 +425,33 @@ export class AutomationScheduler {
             status: 'BLOCKED',
             lastError: 'Canal inacessível na revalidação',
           });
+          if (g.status !== 'STARS') {
+            this.db.addLog({
+              createdAt: serverNow,
+              chatId: g.chatId,
+              chatTitle: g.title,
+              messageSnippet: `Grupo "${g.title}" não aceita mensagens da conta `
+                + '(saída/banimento/trancado) — quarentenado.',
+              linkUsed: '',
+              status: 'SKIPPED',
+            });
+          }
         }
         continue;
       }
 
       const starsCost = probe.starsCost || 0;
       if (starsCost > 0) {
+        if (g.status !== 'STARS' && g.status !== 'BLOCKED') {
+          this.db.addLog({
+            createdAt: serverNow,
+            chatId: g.chatId,
+            chatTitle: g.title,
+            messageSnippet: `Grupo "${g.title}" passou a cobrar ${starsCost} estrelas — quarentenado.`,
+            linkUsed: '',
+            status: 'SKIPPED',
+          });
+        }
         if (g.status !== 'STARS' || g.starsCost !== starsCost) {
           this.db.upsertGroupState({
             chatId: g.chatId,
@@ -464,14 +492,14 @@ export class AutomationScheduler {
     }
 
     if (probedCount > 0) {
-      const remainingUnprobed = quarantinedAll.filter(
+      const remainingUnprobed = allGroups.filter(
         (g) => !this.lastProbeAtByChat.has(g.chatId),
       ).length;
       this.db.addLog({
         createdAt: Math.floor(Date.now() / 1000),
         chatId: 'system',
         chatTitle: 'Sistema de Automação',
-        messageSnippet: `Revalidação de quarentena: ${probedCount} grupo(s) sondado(s), `
+        messageSnippet: `Sondagem de grupos: ${probedCount} verificado(s), `
           + `${reintegratedCount} reintegrado(s)`
           + (remainingUnprobed ? `, ${remainingUnprobed} aguardando 1ª sondagem.` : '.'),
         linkUsed: '',

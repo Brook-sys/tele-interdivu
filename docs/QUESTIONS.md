@@ -381,3 +381,13 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     (AUTH_KEY_DUPLICATED / AUTH_KEY_UNREGISTERED / SESSION_REVOKED /
     USER_DEACTIVATED) retornam `isSessionLost`, o scheduler registra um log
     explicativo e para limpo — retomada via painel ou `POST takeover {}`.
+
+56. **CHAT_WRITE_FORBIDDEN detectável sem tentar enviar** — A resposta do
+    `GetFullChannel` traz o objeto do canal com flags `left` (não sou membro),
+    `bannedRights.sendMessages` (banimento individual) e
+    `defaultBannedRights.sendMessages` (grupo trancado p/ membros). A sonda
+    (`probeChat`) agora lê esses flags e marca BLOCKED sem nenhum envio
+    tentado. A varredura de sondagem também deixou de cobrir só quarentenados:
+    todo grupo é verificado uma vez por processo (varredura inicial em ciclo
+    rápido), então um grupo que piorou é pego antes do primeiro envio da
+    sessão; transições READY→STARS/BLOCKED são logadas.
