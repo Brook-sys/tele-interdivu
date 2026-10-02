@@ -4,6 +4,7 @@ import {
   AutomationScheduler,
   calculateJitterDelayMs,
   evaluateGroupEligibility,
+  getSleepWindowEndMs,
   isInsideSleepWindow,
 } from './scheduler';
 
@@ -306,5 +307,30 @@ describe('quarantine revalidation', () => {
     await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
 
     expect(upserts).toHaveLength(0);
+  });
+});
+
+describe('getSleepWindowEndMs', () => {
+  it('returns today end when inside a same-day window', () => {
+    const now = new Date('2026-09-25T14:30:00');
+    const end = getSleepWindowEndMs('14:00', '15:00', now);
+    expect(end).toBe(new Date('2026-09-25T15:00:00').getTime());
+  });
+
+  it('returns next-day end when inside an overnight window after midnight crossing', () => {
+    const now = new Date('2026-09-25T23:45:00');
+    const end = getSleepWindowEndMs('23:30', '07:30', now);
+    expect(end).toBe(new Date('2026-09-26T07:30:00').getTime());
+  });
+
+  it('returns today end when inside an overnight window before midnight', () => {
+    const now = new Date('2026-09-26T03:00:00');
+    const end = getSleepWindowEndMs('23:30', '07:30', now);
+    expect(end).toBe(new Date('2026-09-26T07:30:00').getTime());
+  });
+
+  it('returns undefined outside the window', () => {
+    const now = new Date('2026-09-25T16:00:00');
+    expect(getSleepWindowEndMs('14:00', '15:00', now)).toBeUndefined();
   });
 });

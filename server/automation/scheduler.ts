@@ -1,4 +1,5 @@
 import type { AutomationDatabase, AutomationDbConfig, GroupStateRecord } from '../db/database';
+import type { OrchestratorSendResult, OrchestratorWorkerClient } from '../orchestrator/workerClient';
 import type { ChatProbeResult } from './telegramRunner';
 
 import { compileSpunMessage } from './spintax';
@@ -27,6 +28,9 @@ export interface SchedulerState {
   waitingReason?: string;
   lastRunError?: string;
   wasInSleepWindow?: boolean;
+  // UI-facing end of the current long wait (sleep slices are internal);
+  // during the sleep window this holds the window end instead
+  waitTotalUntil?: number;
 }
 
 export function isInsideSleepWindow(startStr: string, endStr: string, now = new Date()): boolean {
@@ -47,6 +51,19 @@ export function isInsideSleepWindow(startStr: string, endStr: string, now = new 
 
   // Crosses midnight (e.g. 23:30 to 07:30)
   return currentMinutes >= startMinutes || currentMinutes < endMinutes;
+}
+
+// Absolute timestamp (ms) at which the sleep window ends, if inside it now
+export function getSleepWindowEndMs(startStr: string, endStr: string, now = new Date()): number | undefined {
+  if (!isInsideSleepWindow(startStr, endStr, now)) return undefined;
+
+  const [endHour, endMin] = endStr.split(':').map(Number);
+  const end = new Date(now);
+  end.setHours(endHour, endMin, 0, 0);
+  if (end.getTime() <= now.getTime()) {
+    end.setDate(end.getDate() + 1);
+  }
+  return end.getTime();
 }
 
 export function calculateJitterDelayMs(minSec: number, maxSec: number): number {
@@ -140,6 +157,8 @@ export class AutomationScheduler {
 
   private sleepResolve?: () => void;
 
+  private skipRequested = false;
+
   constructor(
     private readonly db: AutomationDatabase,
     private readonly sendCallback: SendCallback,
@@ -220,6 +239,7 @@ export class AutomationScheduler {
   }
 
   skipPause() {
+    this.skipRequested = true;
     if (this.sleepResolve) {
       const resolve = this.sleepResolve;
       this.sleepResolve = undefined;
@@ -270,11 +290,20 @@ export class AutomationScheduler {
     signal: AbortSignal,
   ) {
     let remainingMs = ms;
-    while (remainingMs > 0 && !signal.aborted) {
-      if (await this.enterSleepWindowIfActive(config, signal)) continue;
-      const chunkMs = Math.min(remainingMs, 60_000);
-      await this.sleep(chunkMs, signal);
-      remainingMs -= chunkMs;
+    try {
+      while (remainingMs > 0 && !signal.aborted) {
+        this.state.waitTotalUntil = Date.now() + remainingMs;
+        if (await this.enterSleepWindowIfActive(config, signal)) continue;
+        if (this.skipRequested) {
+          this.skipRequested = false;
+          break;
+        }
+        const chunkMs = Math.min(remainingMs, 60_000);
+        await this.sleep(chunkMs, signal);
+        remainingMs -= chunkMs;
+      }
+    } finally {
+      this.state.waitTotalUntil = undefined;
     }
     this.exitSleepWindowIfFinished(config, signal);
   }
@@ -303,7 +332,11 @@ export class AutomationScheduler {
       });
     }
 
+    // The sleep window is never skippable; swallow stray requests
+    this.skipRequested = false;
     this.state.status = 'SLEEP_WINDOW';
+    const windowEndMs = getSleepWindowEndMs(config.sleepWindowStart, config.sleepWindowEnd);
+    if (windowEndMs) this.state.waitTotalUntil = windowEndMs;
     await this.sleep(60_000, signal);
     this.state.status = 'RUNNING';
     return true;
@@ -320,6 +353,7 @@ export class AutomationScheduler {
     }
 
     this.state.wasInSleepWindow = undefined;
+    this.state.waitTotalUntil = undefined;
     this.db.addLog({
       createdAt: Math.floor(Date.now() / 1000),
       chatId: 'system',

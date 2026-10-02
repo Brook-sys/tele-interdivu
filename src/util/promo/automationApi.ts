@@ -17,6 +17,9 @@ export interface AutomationStatusResponse {
   currentChatTitle?: string;
   nextRunAt?: number;
   sleepUntil?: number;
+  // Total end of the current long wait (inclui o tempo restante de fato,
+  // mesmo com o fatiamento interno em blocos); na janela de sono, é o fim dela
+  waitTotalUntil?: number;
   activeRound: number;
   sentInRoundCount?: number;
   waitingReason?: string;

@@ -376,8 +376,9 @@ const PromoAutomation = ({
   const renderStatusBanner = () => {
     const status = statusData?.status || 'STOPPED';
 
-    const sleepRemaining = statusData?.sleepUntil && statusData.sleepUntil > nowMs
-      ? Math.ceil((statusData.sleepUntil - nowMs) / 1000)
+    const displayWaitUntil = statusData?.waitTotalUntil || statusData?.sleepUntil;
+    const sleepRemaining = displayWaitUntil && displayWaitUntil > nowMs
+      ? Math.ceil((displayWaitUntil - nowMs) / 1000)
       : 0;
     const nextRunRemaining = statusData?.nextRunAt && statusData.nextRunAt > nowMs
       ? Math.ceil((statusData.nextRunAt - nowMs) / 1000)
@@ -406,7 +407,9 @@ const PromoAutomation = ({
       label = `Pausa entre Rodadas (${formatCountdownSeconds(sleepRemaining)})`;
     } else if (status === 'SLEEP_WINDOW') {
       badgeClass = styles.badgeSleep;
-      label = lang('PromoAutomationSleepWindow');
+      label = sleepRemaining > 0
+        ? `${lang('PromoAutomationSleepWindow')} (${formatCountdownSeconds(sleepRemaining)})`
+        : lang('PromoAutomationSleepWindow');
     } else if (status === 'MICRO_PAUSE') {
       badgeClass = styles.badgeMicroPause;
       label = `${lang('PromoAutomationMicroPause')} (${formatCountdownSeconds(sleepRemaining)})`;
@@ -426,8 +429,7 @@ const PromoAutomation = ({
             && (
               status === 'MICRO_PAUSE'
               || status === 'WAITING_NEXT_ROUND'
-              || status === 'WAITING_COOLDOWN'
-              || status === 'WAITING_MESSAGES'
+              || status === 'CIRCUIT_BREAKER'
             ) && (
             <Button
               color="translucent"

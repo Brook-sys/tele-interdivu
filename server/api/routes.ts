@@ -107,6 +107,7 @@ export function createApiHandler(
           currentChatTitle: schedulerState.currentChatTitle,
           nextRunAt: schedulerState.nextRunAt,
           sleepUntil: schedulerState.sleepUntil,
+          waitTotalUntil: schedulerState.waitTotalUntil ?? schedulerState.sleepUntil,
           activeRound: schedulerState.activeRound,
           sentInRoundCount: schedulerState.sentInRoundCount,
           lastError: schedulerState.lastRunError,

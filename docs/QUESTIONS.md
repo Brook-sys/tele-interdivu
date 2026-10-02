@@ -340,3 +340,14 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     qualquer container: no master mostra contas (status, metas, hb) e feed
     de grants; em workers exibe aviso. Env novos: NODE_ROLE, MASTER_URL,
     WORKER_ID, WORKER_API_URL, ORCHESTRATOR_TOKEN.
+
+52. **Countdown de pausas longas mostrava fatias de 1 minuto** — O fatiamento
+    interno (sleepWithWindowCheck, blocos de 60s) vazava para a UI porque
+    `sleepUntil` apontava para o fim da fatia. Fix: novo campo
+    `waitTotalUntil` no estado do scheduler (e na API `status`) com o fim
+    real da espera; na janela de sono aponta para o fim da janela
+    (`getSleepWindowEndMs`). O banner agora exibe o tempo total; "Pular
+    pausa" de fato pula a pausa inteira (flag `skipRequested` consumida por
+    fatia, nunca atravessa a janela de sono — que continua impulável);
+    botão "Pular pausa" sumiu de WAITING_COOLDOWN/WAITING_MESSAGES (nada a
+    acelerar) e passou a existir em CIRCUIT_BREAKER.
