@@ -567,17 +567,32 @@ export class AutomationScheduler {
           );
 
           if (evalResult.reason === 'WAITING_SLOWMODE' || evalResult.reason === 'WAITING_RESEND') {
-            countWaitingSlowmode++;
-            let remaining: number;
-            if (evalResult.reason === 'WAITING_RESEND') {
-              remaining = (g.lastSentAt || serverNow) + config.minResendIntervalMinutes * 60 - serverNow;
+            // Cooldown only "counts" for groups that already satisfy the
+            // other-messages rule — otherwise waiting out the cooldown would
+            // still not produce a send, which makes the UI spin between
+            // groups without ever sending (those groups are really waiting
+            // for messages).
+            const meetsMessages = !g.lastSentAt
+              || g.otherMessagesCount >= config.minOtherMessages
+              || (this.checkMessagesCallback
+                ? (await this.checkMessagesCallback(g.chatId, config.minOtherMessages)) >= config.minOtherMessages
+                : false);
+
+            if (!meetsMessages) {
+              countWaitingMessages++;
             } else {
-              remaining = g.slowmodeNextSendDate && g.slowmodeNextSendDate > serverNow
-                ? g.slowmodeNextSendDate - serverNow : (g.slowmodeSeconds || 60);
-            }
-            if (remaining < minSlowmodeWaitSeconds) {
-              minSlowmodeWaitSeconds = remaining;
-              slowestGroupTitle = g.title;
+              countWaitingSlowmode++;
+              let remaining: number;
+              if (evalResult.reason === 'WAITING_RESEND') {
+                remaining = (g.lastSentAt || serverNow) + config.minResendIntervalMinutes * 60 - serverNow;
+              } else {
+                remaining = g.slowmodeNextSendDate && g.slowmodeNextSendDate > serverNow
+                  ? g.slowmodeNextSendDate - serverNow : (g.slowmodeSeconds || 60);
+              }
+              if (remaining < minSlowmodeWaitSeconds) {
+                minSlowmodeWaitSeconds = remaining;
+                slowestGroupTitle = g.title;
+              }
             }
           } else if (evalResult.reason === 'WAITING_MESSAGES') {
             countWaitingMessages++;

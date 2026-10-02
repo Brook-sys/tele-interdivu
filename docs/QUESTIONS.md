@@ -351,3 +351,12 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     fatia, nunca atravessa a janela de sono — que continua impulável);
     botão "Pular pausa" sumiu de WAITING_COOLDOWN/WAITING_MESSAGES (nada a
     acelerar) e passou a existir em CIRCUIT_BREAKER.
+
+53. **Cooldown girando em loop sem nunca enviar** — Grupos em slowmode que
+    também não tinham o mínimo de mensagens de terceiros entravam no balde de
+    WAITING_COOLDOWN: a UI mostrava o cooldown zerar, trocar de grupo e zerar
+    de novo, sem nenhum envio (o grupo continuava sem mensagens). Fix:
+    cooldown só conta para grupos que já cumprem a regra de mensagens
+    (verificada via contador local/GetHistory cacheado); quem falta mensagem
+    cai em WAITING_MESSAGES, então o status exibido reflete o que realmente
+    impede o próximo envio.
