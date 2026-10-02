@@ -48,6 +48,7 @@ export interface AutomationStatusResponse {
     microPauseEveryMin?: number;
     microPauseEveryMax?: number;
     microPauseSeconds?: number;
+    extractorEnabled?: boolean;
   };
   campaign: {
     spintaxTemplate: string;
@@ -131,6 +132,66 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 export function fetchAutomationStatus(): Promise<AutomationStatusResponse> {
   return request<AutomationStatusResponse>('status');
+}
+
+export interface ExtractedLinkItem {
+  kind: string;
+  value: string;
+  domain?: string;
+  preview?: string;
+  sourceChatId: string;
+  sourceChatTitle: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  timesSeen: number;
+}
+
+export interface ExtractStatsResponse {
+  enabled: boolean;
+  byKind: { kind: string; total: number; last24h: number; sourceChats: number }[];
+}
+
+export function fetchExtractedLinks(options: {
+  kind?: string;
+  q?: string;
+  limit?: number;
+  sort?: 'recent' | 'seen';
+} = {}): Promise<ExtractedLinkItem[]> {
+  const params = new URLSearchParams();
+  if (options.kind) params.set('kind', options.kind);
+  if (options.q) params.set('q', options.q);
+  if (options.limit) params.set('limit', String(options.limit));
+  if (options.sort) params.set('sort', options.sort);
+  const qs = params.toString();
+  return request<ExtractedLinkItem[]>(`extract/links${qs ? `?${qs}` : ''}`);
+}
+
+export function fetchExtractStats(): Promise<ExtractStatsResponse> {
+  return request<ExtractStatsResponse>('extract/stats');
+}
+
+export function clearExtractedLinks(kind?: string): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>('extract/clear', {
+    method: 'POST',
+    body: JSON.stringify(kind ? { kind } : {}),
+  });
+}
+
+export async function downloadExtractedLinks(kind?: string): Promise<void> {
+  const token = getApiToken();
+  const qs = kind ? `?kind=${encodeURIComponent(kind)}` : '';
+  const res = await fetch(`/api/v1/automation/extract/export${qs}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `extracted-${kind || 'all'}.txt`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 export function startAutomationTakeover(payload: {

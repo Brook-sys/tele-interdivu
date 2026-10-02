@@ -202,3 +202,93 @@ describe('Automation REST API routes', () => {
     }
   });
 });
+
+
+describe('Extractor REST API', () => {
+  let exServer: http.Server;
+  let exPort: number;
+  let exDb: AutomationDatabase;
+
+  beforeAll(async () => {
+    exDb = new AutomationDatabase(':memory:');
+    const exRunner = new TelegramRunner(exDb);
+    const exScheduler = new AutomationScheduler(exDb, () => Promise.resolve({ success: true }));
+    const handler = createApiHandler(exDb, exRunner, exScheduler);
+    exServer = http.createServer(async (req, res) => {
+      const handled = await handler(req, res);
+      if (!handled) {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    await new Promise<void>((resolve) => {
+      exServer.listen(0, '127.0.0.1', () => {
+        exPort = (exServer.address() as any).port;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(() => {
+    exDb.close();
+    exServer.close();
+  });
+
+  async function exApi(path: string, options: RequestInit = {}) {
+    const res = await fetch(`http://127.0.0.1:${exPort}/api/v1/automation/${path}`, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    });
+    return { status: res.status, data: await res.json() };
+  }
+
+  it('extract endpoints list, export and clear extracted items', async () => {
+    // Seed via DB directly (extraction itself is covered in links.test.ts)
+    exDb.upsertExtractedItem({
+      kind: 'invite_link',
+      value: 't.me/+TestSeed',
+      domain: 't.me',
+      sourceChatId: '-1001',
+      sourceChatTitle: 'Grupo Teste',
+    });
+    exDb.upsertExtractedItem({
+      kind: 'external_link',
+      value: 'example.com/oferta',
+      domain: 'example.com',
+      sourceChatId: '-1001',
+      sourceChatTitle: 'Grupo Teste',
+    });
+    // Same link again: must dedup into times_seen++
+    exDb.upsertExtractedItem({
+      kind: 'invite_link',
+      value: 't.me/+TestSeed',
+      domain: 't.me',
+      sourceChatId: '-1002',
+      sourceChatTitle: 'Outro Grupo',
+    });
+
+    const list = await exApi('extract/links');
+    expect(list.status).toBe(200);
+    expect(list.data).toHaveLength(2);
+    const invite = list.data.find((i: any) => i.value === 't.me/+TestSeed');
+    expect(invite.timesSeen).toBe(2);
+
+    const filtered = await exApi('extract/links?kind=invite_link');
+    expect(filtered.data).toHaveLength(1);
+
+    const stats = await exApi('extract/stats');
+    expect(stats.status).toBe(200);
+    expect(stats.data.enabled).toBe(true);
+    expect(stats.data.byKind.find((k: any) => k.kind === 'invite_link').total).toBe(1);
+
+    const text = await fetch(`http://127.0.0.1:${exPort}/api/v1/automation/extract/export?kind=invite_link`);
+    expect(text.status).toBe(200);
+    expect((await text.text()).trim()).toBe('t.me/+TestSeed');
+
+    const cleared = await exApi('extract/clear', { method: 'POST', body: JSON.stringify({ kind: 'invite_link' }) });
+    expect(cleared.status).toBe(200);
+    const after = await exApi('extract/links');
+    expect(after.data).toHaveLength(1);
+    expect(after.data[0].kind).toBe('external_link');
+  });
+});

@@ -226,9 +226,52 @@ export function createApiHandler(
         if (method === 'POST') {
           const patch = await readJsonBody<any>(req);
           const updated = db.updateConfig(patch);
+          runner.setExtractorEnabled(updated.extractorEnabled);
           sendJson(res, 200, updated);
           return true;
         }
+      }
+
+      // 4b. Extractor: links extracted passively from target group messages
+      if (route === 'extract/links' && method === 'GET') {
+        const items = db.getExtractedItems({
+          kind: parsedUrl.searchParams.get('kind') || undefined,
+          query: parsedUrl.searchParams.get('q') || undefined,
+          limit: parsedUrl.searchParams.get('limit')
+            ? Number(parsedUrl.searchParams.get('limit')) : undefined,
+          orderBy: parsedUrl.searchParams.get('sort') === 'seen' ? 'times_seen' : 'last_seen_at',
+        });
+        sendJson(res, 200, items);
+        return true;
+      }
+
+      if (route === 'extract/stats' && method === 'GET') {
+        sendJson(res, 200, {
+          enabled: db.getConfig().extractorEnabled,
+          byKind: db.getExtractStats(),
+        });
+        return true;
+      }
+
+      if (route === 'extract/export' && method === 'GET') {
+        const items = db.getExtractedItems({
+          kind: parsedUrl.searchParams.get('kind') || undefined,
+          limit: 500,
+        });
+        const body = items.map((item) => item.value).join('\n');
+        res.writeHead(200, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(body);
+        return true;
+      }
+
+      if (route === 'extract/clear' && method === 'POST') {
+        const body = await readJsonBody<{ kind?: string }>(req);
+        db.clearExtractedItems(body.kind);
+        sendJson(res, 200, { success: true });
+        return true;
       }
 
       // 5. GET & POST campaign

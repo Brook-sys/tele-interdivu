@@ -163,3 +163,18 @@ target groups are saved).
 The scheduler (sleep window) uses the container clock. `TZ` defaults to
 `America/Sao_Paulo` in `docker-compose.yml`; override via stack env `TZ`.
 
+
+### Link extraction (passive)
+
+The daemon passively extracts links from new messages arriving in the target
+groups (only while it owns the session). No extra API calls are made — the
+messages already flow through the update handler.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `extract/links?kind=&q=&limit=&sort=` | Extracted links (deduped), filtered by `kind` (`invite_link`, `tg_link`, `external_link`), text search `q`, `sort=seen` for most-seen first. Includes `timesSeen`, `firstSeenAt`, `lastSeenAt`, source group. |
+| GET | `extract/stats` | `{ enabled, byKind: [{ kind, total, last24h, sourceChats }] }`. |
+| GET | `extract/export?kind=invite_link` | `text/plain`, one normalized link per line (max 500). |
+| POST | `extract/clear` | `{ kind?: string }` — clears one kind or everything. |
+
+Toggle globally via `POST /config` with `{ "extractorEnabled": true|false }`.

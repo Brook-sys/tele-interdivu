@@ -22,6 +22,7 @@ export interface AutomationDbConfig {
   microPauseEveryMin: number;
   microPauseEveryMax: number;
   microPauseSeconds: number;
+  extractorEnabled: boolean;
 }
 
 export interface AutomationCampaign {
@@ -55,6 +56,20 @@ export interface AutomationLogRecord {
   details?: string;
 }
 
+export interface ExtractedItemRecord {
+  kind: string;
+  value: string;
+  domain?: string;
+  preview?: string;
+  sourceChatId: string;
+  sourceChatTitle: string;
+  messageId?: number;
+  senderId?: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  timesSeen: number;
+}
+
 export const DEFAULT_CONFIG: AutomationDbConfig = {
   mode: 'manual',
   minDelaySeconds: 60,
@@ -72,6 +87,7 @@ export const DEFAULT_CONFIG: AutomationDbConfig = {
   microPauseEveryMin: 6,
   microPauseEveryMax: 10,
   microPauseSeconds: 300,
+  extractorEnabled: true,
 };
 
 export class AutomationDatabase {
@@ -114,7 +130,8 @@ export class AutomationDatabase {
         micro_pause_enabled INTEGER NOT NULL DEFAULT 1,
         micro_pause_every_min INTEGER NOT NULL DEFAULT 6,
         micro_pause_every_max INTEGER NOT NULL DEFAULT 10,
-        micro_pause_seconds INTEGER NOT NULL DEFAULT 300
+        micro_pause_seconds INTEGER NOT NULL DEFAULT 300,
+        extractor_enabled INTEGER NOT NULL DEFAULT 1
       );
 
       CREATE TABLE IF NOT EXISTS campaign (
@@ -156,6 +173,24 @@ export class AutomationDatabase {
       );
 
       CREATE INDEX IF NOT EXISTS idx_logs_created_at ON logs(created_at);
+
+      CREATE TABLE IF NOT EXISTS extracted_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        value TEXT NOT NULL,
+        domain TEXT,
+        preview TEXT,
+        source_chat_id TEXT NOT NULL,
+        source_chat_title TEXT NOT NULL,
+        message_id INTEGER,
+        sender_id TEXT,
+        first_seen_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        times_seen INTEGER NOT NULL DEFAULT 1,
+        UNIQUE(kind, value)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_extracted_kind_seen ON extracted_items(kind, last_seen_at DESC);
     `);
 
     // Migrations for existing databases: ensure new columns exist
@@ -202,6 +237,12 @@ export class AutomationDatabase {
 
     try {
       this.db.exec('ALTER TABLE config ADD COLUMN min_resend_interval_minutes INTEGER NOT NULL DEFAULT 10');
+    } catch {
+      // Column already exists
+    }
+
+    try {
+      this.db.exec('ALTER TABLE config ADD COLUMN extractor_enabled INTEGER NOT NULL DEFAULT 1');
     } catch {
       // Column already exists
     }
@@ -272,6 +313,8 @@ export class AutomationDatabase {
       microPauseEveryMin: Number(row.micro_pause_every_min ?? DEFAULT_CONFIG.microPauseEveryMin),
       microPauseEveryMax: Number(row.micro_pause_every_max ?? DEFAULT_CONFIG.microPauseEveryMax),
       microPauseSeconds: Number(row.micro_pause_seconds ?? DEFAULT_CONFIG.microPauseSeconds),
+      extractorEnabled: row.extractor_enabled === undefined
+        ? DEFAULT_CONFIG.extractorEnabled : Boolean(row.extractor_enabled),
     };
   }
 
@@ -296,7 +339,8 @@ export class AutomationDatabase {
         micro_pause_enabled = ?,
         micro_pause_every_min = ?,
         micro_pause_every_max = ?,
-        micro_pause_seconds = ?
+        micro_pause_seconds = ?,
+        extractor_enabled = ?
       WHERE id = 1
     `).run(
       next.mode,
@@ -315,6 +359,7 @@ export class AutomationDatabase {
       next.microPauseEveryMin,
       next.microPauseEveryMax,
       next.microPauseSeconds,
+      next.extractorEnabled ? 1 : 0,
     );
 
     return next;
@@ -548,8 +593,105 @@ export class AutomationDatabase {
     }));
   }
 
+  upsertExtractedItem(item: Omit<ExtractedItemRecord, 'firstSeenAt' | 'lastSeenAt' | 'timesSeen'>) {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare(`
+      INSERT INTO extracted_items (
+        kind, value, domain, preview, source_chat_id, source_chat_title,
+        message_id, sender_id, first_seen_at, last_seen_at, times_seen
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+      ON CONFLICT(kind, value) DO UPDATE SET
+        last_seen_at = excluded.last_seen_at,
+        times_seen = extracted_items.times_seen + 1,
+        source_chat_id = excluded.source_chat_id,
+        source_chat_title = excluded.source_chat_title,
+        message_id = excluded.message_id,
+        sender_id = excluded.sender_id,
+        preview = coalesce(extracted_items.preview, excluded.preview)
+    `).run(
+      item.kind,
+      item.value,
+      item.domain ?? null,
+      item.preview ?? null,
+      item.sourceChatId,
+      item.sourceChatTitle,
+      item.messageId ?? null,
+      item.senderId ?? null,
+      now,
+      now,
+    );
+  }
+
+  getExtractedItems(options: {
+    kind?: string;
+    query?: string;
+    limit?: number;
+    orderBy?: 'last_seen_at' | 'times_seen';
+  } = {}): ExtractedItemRecord[] {
+    const conditions: string[] = [];
+    const params: (string | number)[] = [];
+
+    if (options.kind) {
+      conditions.push('kind = ?');
+      params.push(options.kind);
+    }
+    if (options.query) {
+      conditions.push('(value LIKE ? OR source_chat_title LIKE ?)');
+      const like = `%${options.query}%`;
+      params.push(like, like);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const orderBy = options.orderBy === 'times_seen' ? 'times_seen DESC' : 'last_seen_at DESC';
+    const limit = Math.min(500, Math.max(1, options.limit ?? 100));
+
+    const rows = this.db.prepare(`
+      SELECT * FROM extracted_items ${where} ORDER BY ${orderBy} LIMIT ?
+    `).all(...params, limit) as any[];
+
+    return rows.map((row) => ({
+      kind: String(row.kind),
+      value: String(row.value),
+      domain: row.domain ? String(row.domain) : undefined,
+      preview: row.preview ? String(row.preview) : undefined,
+      sourceChatId: String(row.source_chat_id),
+      sourceChatTitle: String(row.source_chat_title),
+      messageId: row.message_id !== null && row.message_id !== undefined ? Number(row.message_id) : undefined,
+      senderId: row.sender_id ? String(row.sender_id) : undefined,
+      firstSeenAt: Number(row.first_seen_at),
+      lastSeenAt: Number(row.last_seen_at),
+      timesSeen: Number(row.times_seen),
+    }));
+  }
+
+  getExtractStats(): { kind: string; total: number; last24h: number; sourceChats: number }[] {
+    const since = Math.floor(Date.now() / 1000) - 86400;
+    const rows = this.db.prepare(`
+      SELECT kind,
+        COUNT(*) as total,
+        SUM(CASE WHEN last_seen_at >= ? THEN 1 ELSE 0 END) as last_24h,
+        COUNT(DISTINCT source_chat_id) as source_chats
+      FROM extracted_items
+      GROUP BY kind
+    `).all(since) as any[];
+
+    return rows.map((row) => ({
+      kind: String(row.kind),
+      total: Number(row.total),
+      last24h: Number(row.last_24h || 0),
+      sourceChats: Number(row.source_chats),
+    }));
+  }
+
+  clearExtractedItems(kind?: string) {
+    if (kind) {
+      this.db.prepare('DELETE FROM extracted_items WHERE kind = ?').run(kind);
+      return;
+    }
+    this.db.exec('DELETE FROM extracted_items');
+  }
+
   getTodaySentCount(serverNow: number): number {
-    // 24 hours window
     const since = serverNow - 86400;
     const row = this.db.prepare(`
       SELECT count(*) as count FROM logs

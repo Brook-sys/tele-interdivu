@@ -4,6 +4,8 @@ import { TELEGRAM_API_HASH, TELEGRAM_API_ID } from '../../src/config';
 import { Api as GramJs, errors, sessions } from '../../src/lib/gramjs';
 
 import TelegramClient from '../../src/lib/gramjs/client/TelegramClient';
+
+import { extractLinks } from './extractors/links';
 import { setProxyRelayOrigin } from '../../src/lib/gramjs/extensions/PromisedWebSockets';
 
 export interface TargetChatInfo {
@@ -102,6 +104,12 @@ export class TelegramRunner {
     private readonly proxyPort = 3000,
   ) {}
 
+  private extractorEnabled = true;
+
+  setExtractorEnabled(enabled: boolean) {
+    this.extractorEnabled = enabled;
+  }
+
   getIsConnected(): boolean {
     return Boolean(this.client?.isConnected());
   }
@@ -128,6 +136,8 @@ export class TelegramRunner {
     targetChats.forEach((chat) => {
       this.targetChatMap.set(chat.id, chat);
     });
+
+    this.extractorEnabled = this.db.getConfig().extractorEnabled;
 
     // If a proxy or relay is configured, route MTProto WebSockets through local proxy relay
     if (process.env.PROXY_URL) {
@@ -218,10 +228,45 @@ export class TelegramRunner {
             cached.count++;
           }
           this.db.incrementGroupOtherMessages(chatId);
+
+          // Passive extraction: links from other members' messages
+          if (this.extractorEnabled) {
+            this.extractFromMessage(chatId, message);
+          }
         }
       }
     } catch {
       // Ignore update parsing errors
+    }
+  }
+
+  private extractFromMessage(chatId: string, message: any) {
+    try {
+      const links = extractLinks({
+        messageId: message.id,
+        text: message.message,
+        entities: message.entities,
+      });
+      if (!links.length) return;
+
+      const chatInfo = this.targetChatMap.get(chatId);
+      const senderId = message.fromId?.userId !== undefined
+        ? String(message.fromId.userId) : undefined;
+
+      for (const link of links) {
+        this.db.upsertExtractedItem({
+          kind: link.kind,
+          value: link.value,
+          domain: link.domain,
+          preview: link.preview,
+          sourceChatId: chatId,
+          sourceChatTitle: chatInfo?.title || chatId,
+          messageId: message.id,
+          senderId,
+        });
+      }
+    } catch {
+      // Extraction must never break update handling
     }
   }
 

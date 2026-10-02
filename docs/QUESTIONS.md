@@ -308,3 +308,18 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     (2) lote de revalidação subiu para 10 por ciclo (~2h para cobrir 40+
     quarentenados). Nota: `nextRunAt` igual a `sleepUntil` na API de status
     é intencional durante o delay pré-envio (a próxima ação é o fim do sono).
+
+50. **Módulo de extração passiva de links** — Nova funcionalidade (sem relação
+    com o envio): o daemon agora extrai links de cada mensagem nova que chega
+    nos grupos-alvo, 100% passivo (zero chamadas extras de API — reusa o
+    `handleUpdate` que já recebe os updates do MTProto). Extrator de links
+    classifica em `invite_link` (t.me/+…, joinchat), `tg_link` (demais t.me,
+    username em lowercase) e `external_link`, cobrindo tanto URLs visíveis
+    quanto escondidas atrás de entidades `MessageEntityTextUrl`. Dedup global
+    por (kind, valor normalizado) com `times_seen`/`first_seen_at`/
+    `last_seen_at`. Ligável/desligável (`extractorEnabled` no config, lido no
+    start do runner e atualizado ao vivo pelo POST /config). APIs novas:
+    `extract/links|stats|export|clear`. UI nova "Extração de Links" no menu
+    lateral com stats, abas por tipo, busca, exportação .txt e limpeza.
+    Arquitetura preparada para novos extratores (telefone, @username,
+    palavras-chave) — basta adicionar um extrator ao pipeline.

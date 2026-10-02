@@ -2364,6 +2364,15 @@ export interface LangPair {
   'PromoAutomationMicroPauseMin': undefined;
   'PromoAutomationMicroPauseMax': undefined;
   'PromoAutomationMicroPauseDuration': undefined;
+  'PromoExtractTitle': undefined;
+  'PromoExtractEnabled': undefined;
+  'PromoExtractInvites': undefined;
+  'PromoExtractTgLinks': undefined;
+  'PromoExtractExternal': undefined;
+  'PromoExtractSearchPlaceholder': undefined;
+  'PromoExtractExport': undefined;
+  'PromoExtractClear': undefined;
+  'PromoExtractEmpty': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4613,6 +4622,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'PromoManageSelectedCount': {
+    'count': V;
+  };
+  'PromoExtractTimesSeen': {
     'count': V;
   };
 }

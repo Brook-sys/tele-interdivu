@@ -35,6 +35,7 @@ import ArchivedChats from './ArchivedChats.async';
 import LeftMain from './main/LeftMain';
 import NewChat from './newChat/NewChat.async';
 import PromoAutomation from './promo/PromoAutomation';
+import PromoExtract from './promo/PromoExtract';
 import PromoManageGroups from './promo/PromoManageGroups';
 import PromoPanel from './promo/PromoPanel';
 import Settings from './settings/Settings.async';
@@ -85,6 +86,8 @@ enum ContentType {
   PromoManage,
 
   PromoAutomation,
+
+  PromoExtract,
 }
 
 const RENDER_COUNT = Object.keys(ContentType).length / 2;
@@ -157,6 +160,9 @@ function LeftColumn({
       break;
     case LeftColumnContent.PromoAutomation:
       contentType = ContentType.PromoAutomation;
+      break;
+    case LeftColumnContent.PromoExtract:
+      contentType = ContentType.PromoExtract;
       break;
   }
 
@@ -578,6 +584,13 @@ function LeftColumn({
       case ContentType.PromoAutomation:
         return (
           <PromoAutomation
+            isActive={isActive}
+            onReset={handleReset}
+          />
+        );
+      case ContentType.PromoExtract:
+        return (
+          <PromoExtract
             isActive={isActive}
             onReset={handleReset}
           />

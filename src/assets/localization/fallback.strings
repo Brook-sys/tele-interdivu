@@ -3206,3 +3206,14 @@
 "PromoAutomationMicroPauseMin" = "Pausar a cada mín envios";
 "PromoAutomationMicroPauseMax" = "Pausar a cada máx envios";
 "PromoAutomationMicroPauseDuration" = "Duração da micro-pausa (s)";
+"PromoExtractTitle" = "Extração de Links";
+"PromoExtractEnabled" = "Extrator ativo (coleta links dos grupos da automação)";
+"PromoExtractInvites" = "Convites";
+"PromoExtractTgLinks" = "Links TG";
+"PromoExtractExternal" = "Externos";
+"PromoExtractSearchPlaceholder" = "Buscar por link ou grupo…";
+"PromoExtractExport" = "Exportar .txt";
+"PromoExtractClear" = "Limpar lista";
+"PromoExtractEmpty" = "Nenhum link extraído ainda. O extrator coleta automaticamente as mensagens novas dos grupos da automação enquanto ela estiver ativa.";
+"PromoExtractTimesSeen_one" = "visto {count} vez";
+"PromoExtractTimesSeen_other" = "visto {count} vezes";

@@ -311,6 +311,7 @@ export enum LeftColumnContent {
   PromoPanel,
   PromoManage,
   PromoAutomation,
+  PromoExtract,
 }
 
 export enum GlobalSearchContent {
