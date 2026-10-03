@@ -417,3 +417,13 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     próprio convite, zero chamadas extras). Convite expirado marca
     `resolved_failed` e não tenta de novo. Arquitetura do resolver isolada
     (runner.resolveInviteLink) para futura auto-resolução de convites novos.
+
+59. **Suporte a proxy IPv6** — Três barreiras removidas: (1) `URL#hostname`
+    mantém os colchetes em literais IPv6 (`socks5://…@[2001:db8::1]:1080`) e
+    `net.connect` engasgava no getaddrinfo — agora o host do proxy é
+    desbracketado antes de conectar (SOCKS5 e HTTP CONNECT); (2) destino
+    IPv6 no SOCKS5 não era implementado ("use domain") — agora usa
+    ATYP=0x04 com endereço de 16 bytes (parser expande "::"); (3) HTTP
+    CONNECT e o header `Host` do wsRelay formatam alvo IPv6 com colchetes
+    (`CONNECT [::1]:443`), formato exigido pela spec. Testes cobrem proxy
+    host IPv6 + destino IPv6 nos dois protocolos.

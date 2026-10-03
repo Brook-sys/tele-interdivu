@@ -7,6 +7,11 @@ You are an expert in TypeScript, JavaScript, HTML, SCSS and Teact with deep expe
 - **No new libraries.** Use existing dependencies only. If a task truly can't be done without a new library, stop and explain why.
 - **Do not** write tests.
 
+- **NUNCA habilite comportamento automático perigoso por padrão** (regra permanente do dono do projeto):
+  - Toda funcionalidade que gera atividade no Telegram sem clique humano explícito (auto-join em convites, auto-resolução em lote, envios extra, etc.) deve ser **opt-in, desligada por padrão**, e cada execução precisa vir de uma ação consciente do usuário.
+  - Nunca introduza padrões que o Telegram possa classificar como spam/bot em massa (joins rápidos, envios paralelos entre contas no mesmo grupo, resolution em lote sem pacing humano).
+  - Ressalvas de risco são obrigatórias ao propor qualquer recurso que aumente superfície de detecção/ban.
+
 - **SCSS modules:**
   - Name classes in camelCase.
   - Import as `styles` in your component:

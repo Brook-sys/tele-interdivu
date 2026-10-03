@@ -2,7 +2,7 @@ import type http from 'node:http';
 import type stream from 'node:stream';
 import { URL } from 'node:url';
 
-import { createProxiedConnection } from './tunnel';
+import { createProxiedConnection, formatHostPort } from './tunnel';
 
 export function handleWsRelay(
   req: http.IncomingMessage,
@@ -62,7 +62,7 @@ export function handleWsRelay(
 
     // Forward the initial HTTP upgrade request to the Telegram DC
     let upgradeReq = `GET ${targetPath} HTTP/1.1\r\n`
-      + `Host: ${ip}:${port}\r\n`
+      + `Host: ${formatHostPort(ip, port)}\r\n`
       + 'Upgrade: websocket\r\n'
       + 'Connection: Upgrade\r\n';
 

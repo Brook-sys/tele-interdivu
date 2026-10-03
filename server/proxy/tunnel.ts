@@ -11,6 +11,43 @@ export interface ProxiedConnectionOptions {
 
 const DEFAULT_TIMEOUT_MS = 15000;
 
+// Formats host:port with brackets for IPv6 literals (valid in HTTP CONNECT,
+// Host headers and URLs)
+export function formatHostPort(host: string, port: number): string {
+  const bare = host.replace(/^\[|\]$/g, '');
+  return net.isIPv6(bare) ? `[${bare}]:${port}` : `${host}:${port}`;
+}
+
+// Parses an IPv6 literal into 16 bytes (expands "::" shorthand)
+function ipv6ToBuffer(host: string): Buffer {
+  const bare = host.replace(/^\[|\]$/g, '');
+  const sections = bare.split('::');
+
+  if (sections.length > 2) {
+    throw new Error(`Invalid IPv6 address: ${host}`);
+  }
+
+  const parseGroups = (part: string) => (part === '' ? [] : part.split(':'));
+
+  const head = parseGroups(sections[0]);
+  const tail = sections.length === 2 ? parseGroups(sections[1]) : [];
+  const missing = 8 - head.length - tail.length;
+  if (missing < 0) {
+    throw new Error(`Invalid IPv6 address: ${host}`);
+  }
+
+  const groups = [...head, ...Array(missing).fill('0'), ...tail];
+  const buf = Buffer.alloc(16);
+  groups.forEach((group, i) => {
+    const value = parseInt(group, 16);
+    if (Number.isNaN(value) || value < 0 || value > 0xffff) {
+      throw new Error(`Invalid IPv6 address: ${host}`);
+    }
+    buf.writeUInt16BE(value, i * 2);
+  });
+  return buf;
+}
+
 export async function createProxiedConnection(options: ProxiedConnectionOptions): Promise<net.Socket | tls.TLSSocket> {
   const {
     targetHost,
@@ -102,7 +139,8 @@ function connectSocks5(
 ): Promise<net.Socket | tls.TLSSocket> {
   return new Promise((resolve, reject) => {
     const proxyPort = Number(proxyUrl.port) || 1080;
-    const proxyHost = proxyUrl.hostname;
+    // URL#hostname keeps brackets on IPv6 literals ("[::1]"); net.connect wants the bare form
+    const proxyHost = proxyUrl.hostname.replace(/^\[|\]$/g, '');
     const username = proxyUrl.username ? decodeURIComponent(proxyUrl.username) : undefined;
     const password = proxyUrl.password ? decodeURIComponent(proxyUrl.password) : undefined;
 
@@ -240,7 +278,13 @@ function connectSocks5(
         ]);
         socket.write(req);
       } else if (isIpv6) {
-        fail(new Error('Direct IPv6 SOCKS5 not implemented, use domain'));
+        const addressBuf = ipv6ToBuffer(targetHost);
+        const req = Buffer.concat([
+          Buffer.from([0x05, 0x01, 0x00, 0x04]),
+          addressBuf,
+          portBuf,
+        ]);
+        socket.write(req);
       } else {
         const domainBuf = Buffer.from(targetHost);
         const req = Buffer.concat([
@@ -262,7 +306,8 @@ function connectHttpConnect(
 ): Promise<net.Socket | tls.TLSSocket> {
   return new Promise((resolve, reject) => {
     const proxyPort = Number(proxyUrl.port) || 8080;
-    const proxyHost = proxyUrl.hostname;
+    // URL#hostname keeps brackets on IPv6 literals ("[::1]"); net.connect wants the bare form
+    const proxyHost = proxyUrl.hostname.replace(/^\[|\]$/g, '');
     const decodedUser = proxyUrl.username ? decodeURIComponent(proxyUrl.username) : '';
     const decodedPass = proxyUrl.password ? decodeURIComponent(proxyUrl.password) : '';
     const auth = proxyUrl.username
@@ -281,7 +326,8 @@ function connectHttpConnect(
     socket.once('error', fail);
 
     socket.on('connect', () => {
-      let req = `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n`;
+      const hostPort = formatHostPort(targetHost, targetPort);
+      let req = `CONNECT ${hostPort} HTTP/1.1\r\nHost: ${hostPort}\r\n`;
       if (auth) {
         req += `Proxy-Authorization: ${auth}\r\n`;
       }
