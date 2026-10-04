@@ -330,11 +330,29 @@
 .logTop {
   display: flex;
   justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .logTitle {
+  overflow: hidden;
+  min-width: 0;
   font-size: 0.8125rem;
   font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logMeta {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.logTime {
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
 }
 
 .logStatus {

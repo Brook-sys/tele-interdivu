@@ -792,25 +792,36 @@ const PromoAutomation = ({
         {logsData.length === 0 ? (
           <div className={styles.emptyText}>Nenhum log registrado ainda.</div>
         ) : (
-          logsData.map((log, idx) => (
-            <div key={idx} className={styles.logRow}>
-              <div className={styles.logTop}>
-                <span className={styles.logTitle}>{log.chatTitle}</span>
-                <span className={buildClassName(
-                  styles.logStatus,
-                  log.status === 'SUCCESS' && styles.logSuccess,
-                  log.status === 'SKIPPED' && styles.logSkipped,
-                  log.status === 'FLOOD_WAIT' && styles.logFlood,
-                  log.status === 'ERROR' && styles.logError,
-                )}
-                >
-                  {log.status}
-                </span>
+          logsData.map((log, idx) => {
+            const logDate = new Date(log.createdAt * 1000);
+            return (
+              <div key={idx} className={styles.logRow}>
+                <div className={styles.logTop}>
+                  <span className={styles.logTitle}>{log.chatTitle}</span>
+                  <div className={styles.logMeta}>
+                    <span
+                      className={styles.logTime}
+                      title={logDate.toLocaleString(lang.code)}
+                    >
+                      {logDate.toLocaleTimeString(lang.code)}
+                    </span>
+                    <span className={buildClassName(
+                      styles.logStatus,
+                      log.status === 'SUCCESS' && styles.logSuccess,
+                      log.status === 'SKIPPED' && styles.logSkipped,
+                      log.status === 'FLOOD_WAIT' && styles.logFlood,
+                      log.status === 'ERROR' && styles.logError,
+                    )}
+                    >
+                      {log.status}
+                    </span>
+                  </div>
+                </div>
+                <div className={styles.logSnippet}>{log.messageSnippet}</div>
+                {log.details && <div className={styles.logDetails}>{log.details}</div>}
               </div>
-              <div className={styles.logSnippet}>{log.messageSnippet}</div>
-              {log.details && <div className={styles.logDetails}>{log.details}</div>}
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     );
