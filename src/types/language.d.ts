@@ -2443,6 +2443,8 @@ export interface LangPair {
   'PromoAutomationPerfGroups': undefined;
   'PromoAutomationPerfGrowth': undefined;
   'PromoAutomationPerfNoData': undefined;
+  'PromoAutomationForceRound': undefined;
+  'PromoAutomationReconnect': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {

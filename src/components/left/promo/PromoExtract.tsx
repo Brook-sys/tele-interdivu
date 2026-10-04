@@ -208,6 +208,7 @@ const PromoExtract = ({ isActive, isEmbedded, onReset }: OwnProps) => {
         </div>
 
         <InputText
+          noMargin
           placeholder={lang('PromoExtractSearchPlaceholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -215,6 +216,7 @@ const PromoExtract = ({ isActive, isEmbedded, onReset }: OwnProps) => {
 
         <div className={styles.actionsRow}>
           <Button
+            fluid
             size="smaller"
             color="translucent"
             onClick={() => setSortBy(sortBy === 'recent' ? 'seen' : 'recent')}
@@ -223,16 +225,37 @@ const PromoExtract = ({ isActive, isEmbedded, onReset }: OwnProps) => {
           </Button>
         </div>
         <div className={styles.actionsRow}>
-          <Button size="smaller" disabled={isSubmitting || !items.length} onClick={() => handleExport('txt', false)}>
+          <Button
+            fluid
+            size="smaller"
+            disabled={isSubmitting || !items.length}
+            onClick={() => handleExport('txt', false)}
+          >
             {lang('PromoExtractExportTxt')}
           </Button>
-          <Button size="smaller" disabled={isSubmitting || !items.length} onClick={() => handleExport('csv', false)}>
+          <Button
+            fluid
+            size="smaller"
+            disabled={isSubmitting || !items.length}
+            onClick={() => handleExport('csv', false)}
+          >
             {lang('PromoExtractExportCsv')}
           </Button>
-          <Button size="smaller" disabled={isSubmitting} onClick={() => handleExport('csv', true)}>
+          <Button
+            fluid
+            size="smaller"
+            disabled={isSubmitting}
+            onClick={() => handleExport('csv', true)}
+          >
             {lang('PromoExtractExportCsvAll')}
           </Button>
-          <Button size="smaller" color="danger" disabled={isSubmitting || !items.length} onClick={handleClear}>
+          <Button
+            fluid
+            size="smaller"
+            color="danger"
+            disabled={isSubmitting || !items.length}
+            onClick={handleClear}
+          >
             {lang('PromoExtractClear')}
           </Button>
         </div>

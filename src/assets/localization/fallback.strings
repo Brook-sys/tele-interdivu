@@ -3304,3 +3304,5 @@
 "PromoAutomationPerfErrors_other" = "{count} erros";
 "PromoAutomationPerfSuccess" = "{rate}% de sucesso";
 "PromoAutomationPerfNoData" = "Sem dados suficientes ainda";
+"PromoAutomationForceRound" = "Forçar Nova Rodada";
+"PromoAutomationReconnect" = "Reconectar Telegram";

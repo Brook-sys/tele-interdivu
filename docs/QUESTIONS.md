@@ -450,3 +450,16 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     membros por link — tudo leitura pura de banco, zero atividade no
     Telegram. Corrigido de passagem: UPDATE sem .run() no activateCampaign
     deixava duas campanhas ativas.
+
+62. **Correção do layout dos painéis promo — botões com width 100%** — O
+    `Button` do design system é bloco de largura total por padrão
+    (`width: 100%` + `flex-shrink: 0`, pensado para CTAs de página inteira).
+    Em qualquer linha com 2+ botões (barra de campanhas, prévia, ações de
+    template, adicionar link, exportações do extrator) cada botão exigia
+    100% da largura sem encolher, espremendo selects/inputs até tamanhos
+    mínimos e estourando as linhas. Corrigido marcando esses botões com
+    `fluid` (largura pelo conteúdo), inputs em linha com `flex: 1` +
+    `noMargin` (o input-group carrega margin-bottom de 1.125rem que
+    quebrava o ritmo), abas em grid fixo de 3 colunas (6 abas não
+    transbordam mais), badge de status com ellipsis, linha de peso+ações
+    do template redesenhada e `flex-wrap` nas ações de exportação.

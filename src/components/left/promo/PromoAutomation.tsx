@@ -750,7 +750,7 @@ const PromoAutomation = ({
       <div className={styles.statusBanner}>
         <div className={buildClassName(styles.statusBadge, badgeClass)}>
           <span className={styles.statusDot} />
-          <span>{label}</span>
+          <span className={styles.statusBadgeText}>{label}</span>
         </div>
         <div className={styles.controls}>
           {isRunning
@@ -924,13 +924,13 @@ const PromoAutomation = ({
               </option>
             ))}
           </select>
-          <Button size="smaller" color="translucent" onClick={handleCreateCampaign}>
+          <Button fluid size="smaller" color="translucent" onClick={handleCreateCampaign}>
             {lang('PromoAutomationNewCampaign')}
           </Button>
-          <Button size="smaller" color="translucent" onClick={handleDuplicateCampaign}>
+          <Button fluid size="smaller" color="translucent" onClick={handleDuplicateCampaign}>
             {lang('PromoAutomationDuplicateCampaign')}
           </Button>
-          <Button size="smaller" color="translucent" onClick={handleRenameCampaign}>
+          <Button fluid size="smaller" color="translucent" onClick={handleRenameCampaign}>
             {lang('PromoAutomationRenameCampaign')}
           </Button>
         </div>
@@ -958,10 +958,11 @@ const PromoAutomation = ({
             <>
               <div className={styles.previewBubble}>{previewMessage}</div>
               <div className={styles.btnRow}>
-                <Button size="smaller" color="translucent" onClick={handleRerollPreview}>
+                <Button fluid size="smaller" color="translucent" onClick={handleRerollPreview}>
                   {lang('PromoAutomationReroll')}
                 </Button>
                 <Button
+                  fluid
                   size="smaller"
                   color="primary"
                   disabled={isTestingPreview}
@@ -998,7 +999,7 @@ const PromoAutomation = ({
           <div className={styles.sectionHeader}>
             <span className={styles.fieldLabel}>{lang('PromoAutomationTemplatesLabel')}</span>
             {!editingTemplate && (
-              <Button size="smaller" color="translucent" onClick={() => handleStartEditTemplate()}>
+              <Button fluid size="smaller" color="translucent" onClick={() => handleStartEditTemplate()}>
                 {lang('PromoAutomationNewTemplate')}
               </Button>
             )}
@@ -1007,6 +1008,7 @@ const PromoAutomation = ({
           {editingTemplate && (
             <div className={styles.templateEdit}>
               <InputText
+                noMargin
                 label={lang('PromoAutomationTemplateTitle')}
                 value={editingTemplate.title}
                 onChange={(e: ChangeEvent<HTMLInputElement>) => setEditingTemplate({
@@ -1024,8 +1026,10 @@ const PromoAutomation = ({
                   content: e.target.value,
                 })}
               />
-              <div className={styles.twoCols}>
+              <div className={styles.templateEditRow}>
                 <InputText
+                  noMargin
+                  className={styles.weightInput}
                   label={lang('PromoAutomationTemplateWeight')}
                   value={editingTemplate.weight}
                   inputMode="numeric"
@@ -1034,19 +1038,18 @@ const PromoAutomation = ({
                     weight: e.target.value,
                   })}
                 />
-                <div className={styles.btnRow}>
-                  <Button size="smaller" onClick={handleCancelEditTemplate}>
-                    {lang('PromoAutomationCancel')}
-                  </Button>
-                  <Button
-                    size="smaller"
-                    color="primary"
-                    disabled={isSubmitting || !editingValidation?.isValid}
-                    onClick={handleSaveTemplate}
-                  >
-                    {lang('PromoAutomationSave')}
-                  </Button>
-                </div>
+                <Button fluid size="smaller" onClick={handleCancelEditTemplate}>
+                  {lang('PromoAutomationCancel')}
+                </Button>
+                <Button
+                  fluid
+                  size="smaller"
+                  color="primary"
+                  disabled={isSubmitting || !editingValidation?.isValid}
+                  onClick={handleSaveTemplate}
+                >
+                  {lang('PromoAutomationSave')}
+                </Button>
               </div>
               {editingTemplate.content && !editingValidation?.isValid && (
                 <div className={styles.inlineError}>{editingValidation?.error}</div>
@@ -1225,11 +1228,14 @@ const PromoAutomation = ({
           })}
           <div className={styles.addLinkRow}>
             <InputText
+              noMargin
+              className={styles.addLinkInput}
               placeholder={lang('PromoAutomationLinkUrlPlaceholder')}
               value={newLinkUrl}
               onChange={(e: ChangeEvent<HTMLInputElement>) => setNewLinkUrl(e.target.value)}
             />
             <Button
+              fluid
               size="smaller"
               disabled={isSubmitting || !newLinkUrl.trim()}
               onClick={handleAddLink}
@@ -1248,6 +1254,7 @@ const PromoAutomation = ({
           {trackingEnabled && (
             <>
               <InputText
+                noMargin
                 label={lang('PromoAutomationMemberTrackingInterval')}
                 value={trackingInterval}
                 inputMode="numeric"
@@ -1475,12 +1482,14 @@ const PromoAutomation = ({
 
         <div className={styles.twoCols}>
           <InputText
+            noMargin
             label={lang('PromoAutomationMinDelay')}
             value={minDelay}
             inputMode="numeric"
             onChange={(e) => setMinDelay(e.target.value)}
           />
           <InputText
+            noMargin
             label={lang('PromoAutomationMaxDelay')}
             value={maxDelay}
             inputMode="numeric"
@@ -1490,6 +1499,7 @@ const PromoAutomation = ({
 
         {mode === 'continuous' && (
           <InputText
+            noMargin
             label={lang('PromoAutomationRoundInterval')}
             value={roundInterval}
             inputMode="numeric"
@@ -1498,6 +1508,7 @@ const PromoAutomation = ({
         )}
 
         <InputText
+          noMargin
           label={lang('PromoAutomationRoundTargetSends')}
           value={roundTargetSends}
           inputMode="numeric"
@@ -1505,6 +1516,7 @@ const PromoAutomation = ({
         />
 
         <InputText
+          noMargin
           label={lang('PromoAutomationMinOtherMessages')}
           value={minOtherMsgs}
           inputMode="numeric"
@@ -1512,6 +1524,7 @@ const PromoAutomation = ({
         />
 
         <InputText
+          noMargin
           label={lang('PromoAutomationMinResendInterval')}
           value={minResendInterval}
           inputMode="numeric"
@@ -1519,6 +1532,7 @@ const PromoAutomation = ({
         />
 
         <InputText
+          noMargin
           label={lang('PromoAutomationDailyLimit')}
           value={dailyLimit}
           inputMode="numeric"
@@ -1536,18 +1550,21 @@ const PromoAutomation = ({
         {microPauseEnabled && (
           <div className={styles.twoCols}>
             <InputText
+              noMargin
               label={lang('PromoAutomationMicroPauseMin')}
               value={microPauseEveryMin}
               inputMode="numeric"
               onChange={(e) => setMicroPauseEveryMin(e.target.value)}
             />
             <InputText
+              noMargin
               label={lang('PromoAutomationMicroPauseMax')}
               value={microPauseEveryMax}
               inputMode="numeric"
               onChange={(e) => setMicroPauseEveryMax(e.target.value)}
             />
             <InputText
+              noMargin
               label={lang('PromoAutomationMicroPauseDuration')}
               value={microPauseSeconds}
               inputMode="numeric"
@@ -1567,11 +1584,13 @@ const PromoAutomation = ({
         {sleepEnabled && (
           <div className={styles.twoCols}>
             <InputText
+              noMargin
               label={lang('PromoAutomationSleepStart')}
               value={sleepStart}
               onChange={(e) => setSleepStart(e.target.value)}
             />
             <InputText
+              noMargin
               label={lang('PromoAutomationSleepEnd')}
               value={sleepEnd}
               onChange={(e) => setSleepEnd(e.target.value)}
@@ -1730,12 +1749,12 @@ const PromoAutomation = ({
           {isRunning && (
             <div className={styles.btnRow}>
               {Boolean(scheduler?.sleepRemainingSeconds) && (
-                <Button size="smaller" color="translucent" onClick={handleSkipPause}>
+                <Button fluid size="smaller" color="translucent" onClick={handleSkipPause}>
                   {lang('PromoAutomationSkipPause')}
                 </Button>
               )}
-              <Button size="smaller" color="primary" onClick={handleForceNewRound}>
-                Forçar Nova Rodada
+              <Button fluid size="smaller" color="primary" onClick={handleForceNewRound}>
+                {lang('PromoAutomationForceRound')}
               </Button>
             </div>
           )}
@@ -1766,8 +1785,8 @@ const PromoAutomation = ({
             <span className={styles.debugVal}>{system?.isProxyConfigured ? 'SIM' : 'NÃO (Conexão Direta)'}</span>
           </div>
           <div className={styles.btnRow}>
-            <Button size="smaller" color="translucent" onClick={handleReconnect}>
-              Reconectar Telegram
+            <Button fluid size="smaller" color="translucent" onClick={handleReconnect}>
+              {lang('PromoAutomationReconnect')}
             </Button>
           </div>
         </div>
