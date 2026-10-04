@@ -427,3 +427,15 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     CONNECT e o header `Host` do wsRelay formatam alvo IPv6 com colchetes
     (`CONNECT [::1]:443`), formato exigido pela spec. Testes cobrem proxy
     host IPv6 + destino IPv6 nos dois protocolos.
+
+60. **Campanha fase B — vida real + monitoramento** — Botão "Testar em Saved
+    Messages" manda 1 mensagem real pra você mesmo (cooldown 15s no servidor
+    contra clique duplo; respeita o toggle de preview de link). Links ganham
+    saúde: ao adicionar um link t.me a resolução read-only roda na hora
+    (título/membros/tipo/about viram tooltip), botão "stats" verifica de novo
+    quando quiser, e linhas mostram envios (total + 24h) e membros com delta
+    entre as duas últimas verificações. Tracking periódico de membros é
+    opt-in e desligado por padrão (intervalo mínimo 4h, pacing de ~4s entre
+    links, read-only): cada verificação é atividade de consulta na conta —
+    ressava documentada. ResolveUsername + GetFullChannel cobrem links
+    públicos; convites seguem por checkChatInvite.

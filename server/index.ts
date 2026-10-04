@@ -3,6 +3,7 @@ import './polyfills';
 import http from 'node:http';
 
 import { createOrchestratorHandler } from './api/orchestratorRoutes';
+import { startMemberTrackingLoop } from './automation/memberTracking';
 import { AutomationScheduler } from './automation/scheduler';
 import { TelegramRunner } from './automation/telegramRunner';
 import { AutomationDatabase } from './db/database';
@@ -27,6 +28,13 @@ const scheduler = new AutomationScheduler(
 );
 
 const coordinator = new OrchestratorCoordinator(db);
+
+// Opt-in periodic member tracking for promoted links (read-only, paced)
+startMemberTrackingLoop(
+  db,
+  (url) => runner.resolveCampaignLink(url),
+  () => runner.getIsConnected(),
+);
 
 const apiHandler = createOrchestratorHandler(db, runner, scheduler, coordinator, {
   isMaster: NODE_ROLE === 'master',

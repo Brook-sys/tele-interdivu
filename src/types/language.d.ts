@@ -2423,6 +2423,13 @@ export interface LangPair {
   'PromoAutomationLinkUrlPlaceholder': undefined;
   'PromoAutomationCopyLink': undefined;
   'PromoAutomationLinkCopied': undefined;
+  'PromoAutomationTestSend': undefined;
+  'PromoAutomationTestSent': undefined;
+  'PromoAutomationCheckMembers': undefined;
+  'PromoAutomationLinkInvalid': undefined;
+  'PromoAutomationMemberTrackingLabel': undefined;
+  'PromoAutomationMemberTrackingInterval': undefined;
+  'PromoAutomationMemberTrackingHint': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4684,6 +4691,15 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'PromoAutomationVariations': {
+    'count': V;
+  };
+  'PromoAutomationLinkSends': {
+    'count': V;
+  };
+  'PromoAutomationLinkSends24h': {
+    'count': V;
+  };
+  'PromoAutomationMembersCount': {
     'count': V;
   };
 }

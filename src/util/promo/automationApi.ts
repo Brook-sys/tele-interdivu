@@ -53,6 +53,8 @@ export interface AutomationStatusResponse {
     microPauseSeconds?: number;
     extractorEnabled?: boolean;
     templateRotationEnabled?: boolean;
+    memberTrackingEnabled?: boolean;
+    memberTrackingIntervalHours?: number;
   };
   campaign: AutomationCampaign;
 }
@@ -318,6 +320,39 @@ export function saveCampaignLink(
 export function deleteCampaignLink(id: number): Promise<{ success: boolean }> {
   return request<{ success: boolean }>(`campaign/links/${id}`, {
     method: 'DELETE',
+  });
+}
+
+export interface CampaignLinkStats {
+  id: number;
+  url: string;
+  totalSends: number;
+  last24hSends: number;
+  resolvedTitle?: string;
+  resolvedMembers?: number;
+  resolvedAbout?: string;
+  resolvedAt?: number;
+  resolvedFailed?: boolean;
+  membersDelta?: number;
+}
+
+export function fetchCampaignLinkStats(): Promise<CampaignLinkStats[]> {
+  return request<CampaignLinkStats[]>('campaign/links/stats');
+}
+
+export function resolveCampaignLink(
+  id: number,
+): Promise<{ success: boolean; resolved: ResolveInviteResult }> {
+  return request('campaign/links/resolve', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  });
+}
+
+export function sendCampaignTestMessage(text: string): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>('campaign/test-send', {
+    method: 'POST',
+    body: JSON.stringify({ text }),
   });
 }
 

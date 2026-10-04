@@ -80,6 +80,58 @@ describe('AutomationDatabase (in-memory SQLite)', () => {
     db.close();
   });
 
+  it('tracks link usage stats from logs', () => {
+    const db = new AutomationDatabase(':memory:');
+    const now = Math.floor(Date.now() / 1000);
+    db.addLog({
+      createdAt: now, chatId: '-1', chatTitle: 'G',
+      messageSnippet: 'm', linkUsed: 'https://t.me/x', status: 'SUCCESS',
+    });
+    db.addLog({
+      createdAt: now - 90_000, chatId: '-1', chatTitle: 'G',
+      messageSnippet: 'm', linkUsed: 'https://t.me/x', status: 'SUCCESS',
+    });
+    // Failed sends do not count as usage
+    db.addLog({
+      createdAt: now, chatId: '-1', chatTitle: 'G',
+      messageSnippet: 'm', linkUsed: 'https://t.me/x', status: 'ERROR',
+    });
+
+    const stats = db.getLinkUsageStats();
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toEqual({ url: 'https://t.me/x', total: 2, last24h: 1 });
+    db.close();
+  });
+
+  it('stores resolved campaign link info and member snapshots', () => {
+    const db = new AutomationDatabase(':memory:');
+    const campaignId = db.getCampaign().id;
+    const link = db.saveCampaignLink({ campaignId, url: 'https://t.me/canal' });
+
+    db.markCampaignLinkResolved(link.id, {
+      title: 'Meu Canal', members: 500, type: 'channel', about: 'sobre',
+    });
+    db.addLinkSnapshot(link.id, 500);
+    db.addLinkSnapshot(link.id, 537);
+
+    const campaign = db.getCampaign();
+    const record = campaign.allLinks.find((l) => l.id === link.id);
+    expect(record?.resolvedTitle).toBe('Meu Canal');
+    expect(record?.resolvedMembers).toBe(500);
+    expect(record?.resolvedFailed).toBe(false);
+
+    const snapshots = db.getLinkSnapshots(link.id, 2);
+    expect(snapshots[0].members).toBe(537);
+    expect(snapshots[1].members).toBe(500);
+
+    db.markCampaignLinkResolved(link.id, { failed: true });
+    expect(db.getCampaign().allLinks.find((l) => l.id === link.id)?.resolvedFailed).toBe(true);
+
+    db.deleteCampaignLink(link.id);
+    expect(db.getLinkSnapshots(link.id)).toEqual([]);
+    db.close();
+  });
+
   it('migrates the legacy single-row campaign into templates and links', () => {
     const db = new AutomationDatabase(':memory:');
     // Seed the legacy table directly (pre-migration format)

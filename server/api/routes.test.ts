@@ -106,6 +106,60 @@ describe('Automation REST API routes', () => {
     expect(postRes.data.error).toContain('Spintax syntax error');
   });
 
+  it('campaign/links/resolve validates and reports disconnection', async () => {
+    const notFound = await api('campaign/links/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ id: 999999 }),
+    });
+    expect(notFound.status).toBe(404);
+
+    const tg = await api('campaign/links', {
+      method: 'POST',
+      body: JSON.stringify({ url: 'https://t.me/abcxyz' }),
+    });
+    const external = await api('campaign/links', {
+      method: 'POST',
+      body: JSON.stringify({ url: 'https://example.com/a' }),
+    });
+
+    const badKind = await api('campaign/links/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ id: external.data.id }),
+    });
+    expect(badKind.status).toBe(400);
+
+    const offline = await api('campaign/links/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ id: tg.data.id }),
+    });
+    expect(offline.status).toBe(503);
+  });
+
+  it('campaign/links/stats returns per-link usage arrays', async () => {
+    const res = await api('campaign/links/stats');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.data)).toBe(true);
+    if (res.data.length) {
+      expect(res.data[0]).toHaveProperty('url');
+      expect(res.data[0]).toHaveProperty('totalSends');
+      expect(res.data[0]).toHaveProperty('last24hSends');
+    }
+  });
+
+  it('campaign/test-send validates input and requires connection', async () => {
+    const empty = await api('campaign/test-send', {
+      method: 'POST',
+      body: JSON.stringify({ text: '   ' }),
+    });
+    expect(empty.status).toBe(400);
+
+    const offline = await api('campaign/test-send', {
+      method: 'POST',
+      body: JSON.stringify({ text: 'mensagem de teste' }),
+    });
+    expect(offline.status).toBe(503);
+  });
+
   it('POST test-spintax generates 5 previews', async () => {
     const res = await api('test-spintax', {
       method: 'POST',
@@ -257,7 +311,6 @@ describe('Automation REST API routes', () => {
     const del = await api(`campaign/links/${postRes.data.id}`, { method: 'DELETE' });
     expect(del.status).toBe(200);
   });
-
 });
 
 describe('Extractor REST API', () => {
@@ -434,5 +487,4 @@ describe('Extractor resolve & CSV export', () => {
     expect(res.text).toContain('"Destino ""X"""');
     expect(res.text).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
-
 });

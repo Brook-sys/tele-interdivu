@@ -239,3 +239,23 @@ environment:
 - Config flag `templateRotationEnabled` (`POST config`): when true the
   scheduler picks a random enabled template weighted by `weight` per send;
   when false (default) it always uses the first enabled template.
+
+### Campaign live-testing, link health and member tracking
+
+- `POST campaign/test-send` body `{ text }` — sends ONE real message to the
+  account's Saved Messages so the content can be inspected as rendered
+  (respects `linkPreviewEnabled`). Server-side cooldown: one per 15s.
+  503 when the daemon is disconnected.
+- `POST campaign/links/resolve` body `{ id }` — resolves a campaign link
+  destination read-only (`checkChatInvite` for private invites,
+  `resolveUsername` + full info for public links), storing
+  title/members/type/about/stripped-photo on the link and appending a member
+  snapshot. 410 when the destination is dead (recorded as `resolvedFailed`).
+- `GET campaign/links/stats` — per-link send counts (SUCCESS only, total and
+  last 24h from the logs) plus resolved destination info and the member
+  delta between the two latest snapshots.
+- Config: `memberTrackingEnabled` (default **off**) and
+  `memberTrackingIntervalHours` (clamped to ≥ 4) — when enabled, the daemon
+  re-checks enabled t.me links in the background, paced ~4s apart. Each
+  check is read-only but is still account activity; keep it off unless the
+  growth curve matters to you.

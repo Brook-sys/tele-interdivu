@@ -3273,3 +3273,16 @@
 "PromoAutomationLinkUrlPlaceholder" = "https://t.me/seucanal";
 "PromoAutomationCopyLink" = "Copiar link";
 "PromoAutomationLinkCopied" = "Copiado!";
+"PromoAutomationTestSend" = "Testar em Saved Messages";
+"PromoAutomationTestSent" = "Teste enviado para as Mensagens Salvas";
+"PromoAutomationCheckMembers" = "Verificar destino e membros";
+"PromoAutomationLinkSends_one" = "{count} envio";
+"PromoAutomationLinkSends_other" = "{count} envios";
+"PromoAutomationLinkSends24h_one" = "{count} nas últimas 24h";
+"PromoAutomationLinkSends24h_other" = "{count} nas últimas 24h";
+"PromoAutomationMembersCount_one" = "{count} membro";
+"PromoAutomationMembersCount_other" = "{count} membros";
+"PromoAutomationLinkInvalid" = "Link inválido ou expirado";
+"PromoAutomationMemberTrackingLabel" = "Monitorar membros automaticamente";
+"PromoAutomationMemberTrackingInterval" = "Intervalo entre verificações (h, mín. 4)";
+"PromoAutomationMemberTrackingHint" = "Verificação read-only e espaçada dos destinos dos links ativos. Desligado por padrão: cada verificação é atividade de consulta na conta.";

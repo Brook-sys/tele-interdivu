@@ -21,6 +21,7 @@ import {
   type AutomationGroupState,
   type AutomationLogItem,
   type AutomationStatusResponse,
+  type CampaignLinkStats,
   deleteCampaignLink,
   deleteCampaignTemplate,
   fetchAutomationCampaign,
@@ -28,11 +29,14 @@ import {
   fetchAutomationGroups,
   fetchAutomationLogs,
   fetchAutomationStatus,
+  fetchCampaignLinkStats,
   forceNewAutomationRound,
   reconnectAutomationTelegram,
+  resolveCampaignLink,
   saveAutomationConfig,
   saveCampaignLink,
   saveCampaignTemplate,
+  sendCampaignTestMessage,
   skipAutomationPause,
   startAutomationTakeover,
   stopAutomationRelease,
@@ -125,6 +129,11 @@ const PromoAutomation = ({
   const [previewSeed, setPreviewSeed] = useState(0);
   const [newLinkUrl, setNewLinkUrl] = useState('');
   const [copiedUrl, setCopiedUrl] = useState<string | undefined>();
+  const [linkStats, setLinkStats] = useState<CampaignLinkStats[]>([]);
+  const [resolvingLinkId, setResolvingLinkId] = useState<number | undefined>();
+  const [isTestingPreview, markTestingPreview, unmarkTestingPreview] = useFlag();
+  const [trackingEnabled, setTrackingEnabled] = useState(false);
+  const [trackingInterval, setTrackingInterval] = useState('6');
 
   // Settings form state
   const [mode, setMode] = useState<'manual' | 'continuous'>('manual');
@@ -184,6 +193,8 @@ const PromoAutomation = ({
           setDailyLimit(String(res.config.dailyLimit ?? 80));
           setLinkPreview(Boolean(res.config.linkPreviewEnabled));
           setRotationEnabled(Boolean(res.config.templateRotationEnabled));
+          setTrackingEnabled(Boolean(res.config.memberTrackingEnabled));
+          setTrackingInterval(String(res.config.memberTrackingIntervalHours ?? 6));
           setMicroPauseEnabled(res.config.microPauseEnabled !== undefined
             ? Boolean(res.config.microPauseEnabled) : true);
           setMicroPauseEveryMin(String(res.config.microPauseEveryMin ?? 6));
@@ -319,7 +330,12 @@ const PromoAutomation = ({
   });
 
   const refreshCampaign = useLastCallback(async () => {
-    setCampaign(await fetchAutomationCampaign());
+    const [campaignData, stats] = await Promise.all([
+      fetchAutomationCampaign(),
+      fetchCampaignLinkStats(),
+    ]);
+    setCampaign(campaignData);
+    setLinkStats(stats);
   });
 
   const handleToggleRotation = useLastCallback(async (isEnabled: boolean) => {
@@ -446,8 +462,16 @@ const PromoAutomation = ({
     setActionError(undefined);
     markSubmitting();
     try {
-      await saveCampaignLink({ url });
+      const saved = await saveCampaignLink({ url });
       setNewLinkUrl('');
+
+      // Best-effort immediate health check (one click = one read-only check)
+      if (/t\.me\//i.test(url)) {
+        try {
+          await resolveCampaignLink(saved.id);
+        } catch { /* optional check; failures surface via the stats row */ }
+      }
+
       await refreshCampaign();
       showSavedFeedback();
     } catch (err: any) {
@@ -474,6 +498,54 @@ const PromoAutomation = ({
   });
 
   const handleRerollPreview = useLastCallback(() => setPreviewSeed(Date.now()));
+
+  const handleTestSend = useLastCallback(async () => {
+    if (previewMessage === undefined) return;
+    setActionError(undefined);
+    markTestingPreview();
+    try {
+      await sendCampaignTestMessage(previewMessage);
+      setSaveSuccessMsg(lang('PromoAutomationTestSent'));
+      setTimeout(() => setSaveSuccessMsg(undefined), 3000);
+    } catch (err: any) {
+      setActionError(err.message);
+    } finally {
+      unmarkTestingPreview();
+    }
+  });
+
+  const handleCheckLinkMembers = useLastCallback(async (link: AutomationCampaignLink) => {
+    setResolvingLinkId(link.id);
+    setActionError(undefined);
+    try {
+      await resolveCampaignLink(link.id);
+      await refreshCampaign();
+    } catch (err: any) {
+      setActionError(err.message);
+    } finally {
+      setResolvingLinkId(undefined);
+    }
+  });
+
+  const handleToggleTracking = useLastCallback(async (isEnabled: boolean) => {
+    setTrackingEnabled(isEnabled);
+    try {
+      await saveAutomationConfig({ memberTrackingEnabled: isEnabled });
+    } catch (err: any) {
+      setTrackingEnabled(!isEnabled);
+      setActionError(err.message);
+    }
+  });
+
+  const handleSaveTrackingInterval = useLastCallback(async (value: string) => {
+    const hours = Math.max(4, Number(value) || 6);
+    setTrackingInterval(String(hours));
+    try {
+      await saveAutomationConfig({ memberTrackingIntervalHours: hours });
+    } catch (err: any) {
+      setActionError(err.message);
+    }
+  });
 
   const handleSkipPause = useLastCallback(async () => {
     setActionError(undefined);
@@ -771,6 +843,14 @@ const PromoAutomation = ({
                 <Button size="smaller" color="translucent" onClick={handleRerollPreview}>
                   {lang('PromoAutomationReroll')}
                 </Button>
+                <Button
+                  size="smaller"
+                  color="primary"
+                  disabled={isTestingPreview}
+                  onClick={handleTestSend}
+                >
+                  {lang('PromoAutomationTestSend')}
+                </Button>
               </div>
               {isLowVariety && (
                 <div className={styles.varietyWarning}>{lang('PromoAutomationVarietyLow')}</div>
@@ -925,42 +1005,106 @@ const PromoAutomation = ({
           {!links.length && (
             <div className={styles.emptyText}>{lang('PromoAutomationNoLinks')}</div>
           )}
-          {links.map((link) => (
-            <div
-              key={link.id}
-              className={buildClassName(
-                styles.linkItem,
-                !link.isEnabled && styles.linkItemOff,
-              )}
-            >
-              <Checkbox
-                checked={link.isEnabled}
-                onCheck={(isEnabled) => handleToggleLinkEnabled(link, isEnabled)}
-              />
-              <span className={styles.linkUrl}>{link.url}</span>
-              {copiedUrl === link.url && (
-                <span className={styles.linkCopiedHint}>{lang('PromoAutomationLinkCopied')}</span>
-              )}
-              <div className={styles.linkActions}>
-                <Button
-                  round
-                  size="smaller"
-                  color="translucent"
-                  ariaLabel={lang('PromoAutomationCopyLink')}
-                  iconName="copy"
-                  onClick={() => handleCopyLink(link.url)}
-                />
-                <Button
-                  round
-                  size="smaller"
-                  color="translucent"
-                  ariaLabel={lang('PromoAutomationDelete')}
-                  iconName="delete"
-                  onClick={() => handleDeleteLink(link)}
-                />
+          {links.map((link) => {
+            const stats = linkStats.find((stat) => stat.id === link.id);
+            const isResolving = resolvingLinkId === link.id;
+            const isTrackableLink = /^https?:\/\/t\.me\/(?:\+|joinchat\/|[A-Za-z][A-Za-z0-9_]{3,})/i.test(link.url);
+            const tooltipParts = [
+              stats?.resolvedTitle,
+              stats?.resolvedAbout,
+            ].filter(Boolean);
+            const deltaSuffix = stats?.membersDelta !== undefined && stats.membersDelta !== 0
+              ? ` (${stats.membersDelta > 0 ? '+' : ''}${stats.membersDelta})`
+              : '';
+
+            return (
+              <div
+                key={link.id}
+                className={buildClassName(
+                  styles.linkItem,
+                  !link.isEnabled && styles.linkItemOff,
+                )}
+              >
+                <div className={styles.linkMain}>
+                  <Checkbox
+                    checked={link.isEnabled}
+                    onCheck={(isEnabled) => handleToggleLinkEnabled(link, isEnabled)}
+                  />
+                  <span
+                    className={styles.linkUrl}
+                    title={tooltipParts.join('\n') || undefined}
+                  >
+                    {link.url}
+                  </span>
+                  {copiedUrl === link.url && (
+                    <span className={styles.linkCopiedHint}>{lang('PromoAutomationLinkCopied')}</span>
+                  )}
+                  <div className={styles.linkActions}>
+                    {isTrackableLink && (
+                      <Button
+                        round
+                        size="smaller"
+                        color="translucent"
+                        ariaLabel={lang('PromoAutomationCheckMembers')}
+                        iconName="stats"
+                        disabled={isResolving}
+                        onClick={() => handleCheckLinkMembers(link)}
+                      />
+                    )}
+                    <Button
+                      round
+                      size="smaller"
+                      color="translucent"
+                      ariaLabel={lang('PromoAutomationCopyLink')}
+                      iconName="copy"
+                      onClick={() => handleCopyLink(link.url)}
+                    />
+                    <Button
+                      round
+                      size="smaller"
+                      color="translucent"
+                      ariaLabel={lang('PromoAutomationDelete')}
+                      iconName="delete"
+                      onClick={() => handleDeleteLink(link)}
+                    />
+                  </div>
+                </div>
+                <div className={styles.linkMeta}>
+                  {stats && stats.totalSends > 0 && (
+                    <span>
+                      {lang(
+                        'PromoAutomationLinkSends',
+                        { count: stats.totalSends },
+                        { pluralValue: stats.totalSends },
+                      )}
+                      {' ('}
+                      {lang(
+                        'PromoAutomationLinkSends24h',
+                        { count: stats.last24hSends },
+                        { pluralValue: stats.last24hSends },
+                      )}
+                      )
+                    </span>
+                  )}
+                  {stats?.resolvedMembers !== undefined && (
+                    <span>
+                      {lang(
+                        'PromoAutomationMembersCount',
+                        { count: stats.resolvedMembers },
+                        { pluralValue: stats.resolvedMembers },
+                      )}
+                      {deltaSuffix}
+                    </span>
+                  )}
+                  {stats?.resolvedFailed && (
+                    <span className={styles.linkInvalid}>
+                      {lang('PromoAutomationLinkInvalid')}
+                    </span>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           <div className={styles.addLinkRow}>
             <InputText
               placeholder={lang('PromoAutomationLinkUrlPlaceholder')}
@@ -975,6 +1119,28 @@ const PromoAutomation = ({
               {lang('PromoAutomationAddLink')}
             </Button>
           </div>
+
+          <div className={styles.checkboxRow}>
+            <Checkbox
+              checked={trackingEnabled}
+              onCheck={handleToggleTracking}
+              label={lang('PromoAutomationMemberTrackingLabel')}
+            />
+          </div>
+          {trackingEnabled && (
+            <>
+              <InputText
+                label={lang('PromoAutomationMemberTrackingInterval')}
+                value={trackingInterval}
+                inputMode="numeric"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setTrackingInterval(e.target.value)}
+                onBlur={(e: React.FocusEvent<HTMLInputElement>) => void handleSaveTrackingInterval(e.target.value)}
+              />
+              <div className={styles.trackingHint}>
+                {lang('PromoAutomationMemberTrackingHint')}
+              </div>
+            </>
+          )}
         </div>
       </div>
     );

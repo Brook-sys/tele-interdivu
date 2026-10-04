@@ -24,6 +24,8 @@ export interface AutomationDbConfig {
   microPauseSeconds: number;
   extractorEnabled: boolean;
   templateRotationEnabled: boolean;
+  memberTrackingEnabled: boolean;
+  memberTrackingIntervalHours: number;
 }
 
 export interface CampaignTemplateRecord {
@@ -42,6 +44,14 @@ export interface CampaignLinkRecord {
   isEnabled: boolean;
   position: number;
   updatedAt: number;
+  resolvedTitle?: string;
+  resolvedMembers?: number;
+  resolvedType?: string;
+  resolvedAbout?: string;
+  resolvedPhotoB64?: string;
+  resolvedAt?: number;
+  // True when the destination was checked and is invalid/expired
+  resolvedFailed?: boolean;
 }
 
 export interface AutomationCampaign {
@@ -123,6 +133,9 @@ export const DEFAULT_CONFIG: AutomationDbConfig = {
   microPauseSeconds: 300,
   extractorEnabled: true,
   templateRotationEnabled: false,
+  // Opt-in and OFF by default: periodic reads are still account activity
+  memberTrackingEnabled: false,
+  memberTrackingIntervalHours: 6,
 };
 
 export class AutomationDatabase {
@@ -201,8 +214,24 @@ export class AutomationDatabase {
         url TEXT NOT NULL,
         is_enabled INTEGER NOT NULL DEFAULT 1,
         position INTEGER NOT NULL DEFAULT 0,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        resolved_title TEXT,
+        resolved_members INTEGER,
+        resolved_type TEXT,
+        resolved_about TEXT,
+        resolved_photo_b64 TEXT,
+        resolved_at INTEGER,
+        resolved_failed INTEGER
       );
+
+      CREATE TABLE IF NOT EXISTS link_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        link_id INTEGER NOT NULL,
+        members INTEGER NOT NULL,
+        checked_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_link_snapshots ON link_snapshots(link_id, checked_at);
 
       CREATE TABLE IF NOT EXISTS session (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -353,6 +382,34 @@ export class AutomationDatabase {
       // Column already exists
     }
 
+    try {
+      this.db.exec('ALTER TABLE config ADD COLUMN member_tracking_enabled INTEGER NOT NULL DEFAULT 0');
+    } catch {
+      // Column already exists
+    }
+
+    try {
+      this.db.exec('ALTER TABLE config ADD COLUMN member_tracking_interval_hours INTEGER NOT NULL DEFAULT 6');
+    } catch {
+      // Column already exists
+    }
+
+    for (const ddl of [
+      'ALTER TABLE campaign_links ADD COLUMN resolved_title TEXT',
+      'ALTER TABLE campaign_links ADD COLUMN resolved_members INTEGER',
+      'ALTER TABLE campaign_links ADD COLUMN resolved_type TEXT',
+      'ALTER TABLE campaign_links ADD COLUMN resolved_about TEXT',
+      'ALTER TABLE campaign_links ADD COLUMN resolved_photo_b64 TEXT',
+      'ALTER TABLE campaign_links ADD COLUMN resolved_at INTEGER',
+      'ALTER TABLE campaign_links ADD COLUMN resolved_failed INTEGER',
+    ]) {
+      try {
+        this.db.exec(ddl);
+      } catch {
+        // Column already exists
+      }
+    }
+
     for (const ddl of [
       'ALTER TABLE extracted_items ADD COLUMN resolved_title TEXT',
       'ALTER TABLE extracted_items ADD COLUMN resolved_members INTEGER',
@@ -442,6 +499,12 @@ export class AutomationDatabase {
         ? DEFAULT_CONFIG.extractorEnabled : Boolean(row.extractor_enabled),
       templateRotationEnabled: row.template_rotation_enabled === undefined
         ? DEFAULT_CONFIG.templateRotationEnabled : Boolean(row.template_rotation_enabled),
+      memberTrackingEnabled: row.member_tracking_enabled === undefined
+        ? DEFAULT_CONFIG.memberTrackingEnabled : Boolean(row.member_tracking_enabled),
+      memberTrackingIntervalHours: row.member_tracking_interval_hours === undefined
+        ? DEFAULT_CONFIG.memberTrackingIntervalHours : Math.max(
+          4, Number(row.member_tracking_interval_hours),
+        ),
     };
   }
 
@@ -468,7 +531,9 @@ export class AutomationDatabase {
         micro_pause_every_max = ?,
         micro_pause_seconds = ?,
         extractor_enabled = ?,
-        template_rotation_enabled = ?
+        template_rotation_enabled = ?,
+        member_tracking_enabled = ?,
+        member_tracking_interval_hours = ?
       WHERE id = 1
     `).run(
       next.mode,
@@ -489,6 +554,8 @@ export class AutomationDatabase {
       next.microPauseSeconds,
       next.extractorEnabled ? 1 : 0,
       next.templateRotationEnabled ? 1 : 0,
+      next.memberTrackingEnabled ? 1 : 0,
+      Math.max(4, Number(next.memberTrackingIntervalHours)),
     );
 
     return next;
@@ -564,6 +631,14 @@ export class AutomationDatabase {
       isEnabled: Boolean(row.is_enabled),
       position: Number(row.position),
       updatedAt: Number(row.updated_at),
+      resolvedTitle: row.resolved_title ? String(row.resolved_title) : undefined,
+      resolvedMembers: row.resolved_members !== null && row.resolved_members !== undefined
+        ? Number(row.resolved_members) : undefined,
+      resolvedType: row.resolved_type ? String(row.resolved_type) : undefined,
+      resolvedAbout: row.resolved_about ? String(row.resolved_about) : undefined,
+      resolvedPhotoB64: row.resolved_photo_b64 ? String(row.resolved_photo_b64) : undefined,
+      resolvedAt: row.resolved_at ? Number(row.resolved_at) : undefined,
+      resolvedFailed: Boolean(row.resolved_failed),
     };
   }
 
@@ -678,6 +753,84 @@ export class AutomationDatabase {
 
   deleteCampaignLink(id: number) {
     this.db.prepare('DELETE FROM campaign_links WHERE id = ?').run(id);
+    this.db.prepare('DELETE FROM link_snapshots WHERE link_id = ?').run(id);
+  }
+
+  // Records a successful destination resolution (or a confirmed dead link)
+  markCampaignLinkResolved(
+    id: number,
+    resolved: {
+      title?: string;
+      members?: number;
+      type?: string;
+      photoB64?: string;
+      about?: string;
+      failed?: boolean;
+    },
+  ) {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare(`
+      UPDATE campaign_links SET
+        resolved_title = ?,
+        resolved_members = ?,
+        resolved_type = ?,
+        resolved_about = ?,
+        resolved_photo_b64 = ?,
+        resolved_at = ?,
+        resolved_failed = ?
+      WHERE id = ?
+    `).run(
+      resolved.title ?? null,
+      resolved.members ?? null,
+      resolved.type ?? null,
+      resolved.about ?? null,
+      resolved.photoB64 ?? null,
+      now,
+      resolved.failed ? 1 : 0,
+      id,
+    );
+  }
+
+  addLinkSnapshot(linkId: number, members: number) {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare(
+      'INSERT INTO link_snapshots (link_id, members, checked_at) VALUES (?, ?, ?)',
+    ).run(linkId, members, now);
+  }
+
+  getLinkSnapshots(linkId: number, limit = 2): { members: number; checkedAt: number }[] {
+    const rows = this.db.prepare(`
+      SELECT members, checked_at FROM link_snapshots
+      WHERE link_id = ? ORDER BY checked_at DESC, id DESC LIMIT ?
+    `).all(linkId, limit) as any[];
+    return rows.map((row) => ({
+      members: Number(row.members),
+      checkedAt: Number(row.checked_at),
+    }));
+  }
+
+  getLinkLastCheckedAt(linkId: number): number | undefined {
+    const row = this.db.prepare(
+      'SELECT MAX(checked_at) AS last FROM link_snapshots WHERE link_id = ?',
+    ).get(linkId) as any;
+    return row?.last ? Number(row.last) : undefined;
+  }
+
+  // Send counts per promoted link from the logs (successful sends only)
+  getLinkUsageStats(): { url: string; total: number; last24h: number }[] {
+    const dayAgo = Math.floor(Date.now() / 1000) - 86_400;
+    const rows = this.db.prepare(`
+      SELECT link_used, COUNT(*) AS total,
+        SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS last24h
+      FROM logs
+      WHERE status = 'SUCCESS' AND link_used != ''
+      GROUP BY link_used
+    `).all(dayAgo) as any[];
+    return rows.map((row) => ({
+      url: String(row.link_used),
+      total: Number(row.total),
+      last24h: Number(row.last24h || 0),
+    }));
   }
 
   // Full content replace — used to sync a worker with the master's campaign

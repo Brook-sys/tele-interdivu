@@ -6,7 +6,12 @@ import type { AutomationDatabase } from '../db/database';
 
 import { type AutomationScheduler, evaluateGroupEligibility } from '../automation/scheduler';
 import { compileSpunMessage, validateSpintaxSyntax } from '../automation/spintax';
+import { parseCampaignLinkTarget } from '../automation/telegramRunner';
 import { readJsonBody, sendError, sendJson } from './httpHelper';
+
+// Server-side guard against accidental double clicks on the test-send button
+const TEST_SEND_COOLDOWN_MS = 15_000;
+let lastTestSendAt = 0;
 
 export function createApiHandler(
   db: AutomationDatabase,
@@ -433,6 +438,107 @@ export function createApiHandler(
         }
         db.deleteCampaignLink(id);
         sendJson(res, 200, { success: true, deleted: id });
+        return true;
+      }
+
+      // 5f. POST campaign/links/resolve — check a link destination now
+      // (read-only resolution; one click = one check)
+      if (route === 'campaign/links/resolve' && method === 'POST') {
+        const body = await readJsonBody<{ id: number }>(req);
+        const link = db.getCampaign().allLinks.find((l) => l.id === Number(body.id));
+        if (!link) {
+          sendError(res, 404, 'Link not found');
+          return true;
+        }
+        if (!parseCampaignLinkTarget(link.url)) {
+          sendError(res, 400, 'Only t.me links (invite or public) can be resolved');
+          return true;
+        }
+        if (!runner.getIsConnected()) {
+          sendError(res, 503, 'Daemon is not connected to Telegram right now — try again in a few seconds');
+          return true;
+        }
+
+        try {
+          const resolved = await runner.resolveCampaignLink(link.url);
+          if (!resolved) {
+            sendError(res, 503, 'Daemon not connected');
+            return true;
+          }
+          db.markCampaignLinkResolved(link.id, {
+            title: resolved.title,
+            members: resolved.members,
+            type: resolved.chatType,
+            photoB64: resolved.photoB64,
+            about: resolved.about,
+          });
+          if (resolved.members !== undefined) {
+            db.addLinkSnapshot(link.id, resolved.members);
+          }
+          sendJson(res, 200, { success: true, resolved });
+          return true;
+        } catch (err: any) {
+          const message = String(err?.errorMessage || err?.message || err);
+          if (/INVITE_HASH_EXPIRED|INVITE_HASH_INVALID|USERNAME_NOT_FOUND|USERNAME_INVALID/.test(message)) {
+            db.markCampaignLinkResolved(link.id, { failed: true });
+            sendError(res, 410, 'Link inválido, expirado ou destino não existe (registrado)');
+            return true;
+          }
+          throw err;
+        }
+      }
+
+      // 5g. GET campaign/links/stats — usage per link + member snapshots
+      if (route === 'campaign/links/stats' && method === 'GET') {
+        const campaign = db.getCampaign();
+        const usageByUrl = new Map(db.getLinkUsageStats().map((u) => [u.url, u]));
+        const stats = campaign.allLinks.map((link) => {
+          const usage = usageByUrl.get(link.url);
+          const snapshots = db.getLinkSnapshots(link.id, 2);
+          const membersDelta = snapshots.length === 2
+            ? snapshots[0].members - snapshots[1].members : undefined;
+          return {
+            id: link.id,
+            url: link.url,
+            totalSends: usage?.total ?? 0,
+            last24hSends: usage?.last24h ?? 0,
+            resolvedTitle: link.resolvedTitle,
+            resolvedMembers: link.resolvedMembers,
+            resolvedAbout: link.resolvedAbout,
+            resolvedAt: link.resolvedAt,
+            resolvedFailed: link.resolvedFailed,
+            membersDelta,
+          };
+        });
+        sendJson(res, 200, stats);
+        return true;
+      }
+
+      // 5h. POST campaign/test-send — one real message to Saved Messages
+      // so the user sees exactly how the content renders (1 per cooldown)
+      if (route === 'campaign/test-send' && method === 'POST') {
+        const body = await readJsonBody<{ text: string }>(req);
+        if (!body.text || !body.text.trim()) {
+          sendError(res, 400, 'text is required');
+          return true;
+        }
+        const now = Date.now();
+        if (now - lastTestSendAt < TEST_SEND_COOLDOWN_MS) {
+          sendError(res, 429, 'Aguarde alguns segundos antes de enviar outro teste');
+          return true;
+        }
+        if (!runner.getIsConnected()) {
+          sendError(res, 503, 'Daemon is not connected to Telegram right now — try again in a few seconds');
+          return true;
+        }
+
+        const result = await runner.sendTestMessage(body.text);
+        if (!result.success) {
+          sendError(res, 502, result.error);
+          return true;
+        }
+        lastTestSendAt = now;
+        sendJson(res, 200, { success: true });
         return true;
       }
 

@@ -95,6 +95,20 @@ export function extractMessagesFromGramJsUpdate(update: any): any[] {
   return [];
 }
 
+// Dispatches by link shape: private invite hash or public t.me username.
+// Non-Telegram links cannot be resolved and return undefined.
+export function parseCampaignLinkTarget(
+  url: string,
+): { kind: 'invite' | 'public'; value: string } | undefined {
+  const inviteMatch = url.match(/t\.me\/(?:\+|joinchat\/)([A-Za-z0-9_-]+)/i);
+  if (inviteMatch) return { kind: 'invite', value: inviteMatch[1] };
+
+  const publicMatch = url.match(/t\.me\/([A-Za-z][A-Za-z0-9_]{3,})\/?$/i);
+  if (publicMatch) return { kind: 'public', value: publicMatch[1] };
+
+  return undefined;
+}
+
 export class TelegramRunner {
   private client?: TelegramClient;
 
@@ -400,8 +414,19 @@ export class TelegramRunner {
     }
   }
 
-  // Resolves an invite link (read-only, no join). photoStrippedSize ships
-  // inline bytes (a few hundred B) so storing it as base64 is free.
+  // photoStrippedSize ships inline bytes (a few hundred B), so storing it
+  // as base64 is free
+  private extractStrippedPhotoB64(photo: any): string | undefined {
+    const stripped = photo?.sizes?.find((size: any) => (
+      size?.className === 'PhotoStrippedSize' && size?.bytes
+    ));
+    if (!stripped) return undefined;
+    const bytes = stripped.bytes instanceof Buffer
+      ? stripped.bytes : Buffer.from(stripped.bytes);
+    return `data:image/jpeg;base64,${bytes.toString('base64')}`;
+  }
+
+  // Resolves an invite link (read-only, no join)
   async resolveInviteLink(hash: string): Promise<InviteResolveResult | undefined> {
     if (!this.client || !this.client.isConnected()) return undefined;
 
@@ -411,16 +436,6 @@ export class TelegramRunner {
 
     if (!result) return undefined;
 
-    const findStrippedPhoto = (photo: any): string | undefined => {
-      const stripped = photo?.sizes?.find((size: any) => (
-        size?.className === 'PhotoStrippedSize' && size?.bytes
-      ));
-      if (!stripped) return undefined;
-      const bytes = stripped.bytes instanceof Buffer
-        ? stripped.bytes : Buffer.from(stripped.bytes);
-      return `data:image/jpeg;base64,${bytes.toString('base64')}`;
-    };
-
     // chatInviteAlready: our account is already a member of the target
     if (result.className === 'ChatInviteAlready') {
       const chatObj = result.chat;
@@ -429,7 +444,7 @@ export class TelegramRunner {
         title: chatObj?.title || '(sem título)',
         members: chatObj?.participantsCount,
         chatType: isChannel ? (chatObj.broadcast ? 'channel' : 'group') : 'group',
-        photoB64: findStrippedPhoto(chatObj?.photo),
+        photoB64: this.extractStrippedPhotoB64(chatObj?.photo),
       };
     }
 
@@ -440,8 +455,86 @@ export class TelegramRunner {
         ? (result.broadcast ? 'channel' : 'group')
         : 'group',
       about: result.about,
-      photoB64: findStrippedPhoto(result.photo),
+      photoB64: this.extractStrippedPhotoB64(result.photo),
     };
+  }
+
+  // Resolves a public t.me/username destination (read-only)
+  async resolvePublicUsername(username: string): Promise<InviteResolveResult | undefined> {
+    if (!this.client || !this.client.isConnected()) return undefined;
+
+    const resolved = await this.client.invoke(
+      new GramJs.contacts.ResolveUsername({ username }),
+    ) as any;
+
+    const chat = (resolved?.chats || [])[0];
+    if (!chat) return undefined;
+
+    const isChannel = chat.className === 'Channel';
+    let members: number | undefined;
+    let about: string | undefined;
+
+    try {
+      if (isChannel) {
+        const full = await this.client.invoke(new GramJs.channels.GetFullChannel({
+          channel: new GramJs.InputChannel({
+            channelId: chat.id,
+            accessHash: chat.accessHash,
+          }),
+        })) as any;
+        members = full?.fullChat?.participantsCount;
+        about = full?.fullChat?.about;
+      } else if (chat.className === 'Chat') {
+        const full = await this.client.invoke(new GramJs.messages.GetFullChat({
+          chatId: chat.id,
+        })) as any;
+        const participants = full?.fullChat?.participants?.participants;
+        members = Array.isArray(participants) ? participants.length : undefined;
+      }
+    } catch {
+      // Full info unavailable (e.g. restricted/left chat): basics still apply
+    }
+
+    return {
+      title: chat.title || '(sem título)',
+      members,
+      chatType: isChannel ? (chat.broadcast ? 'channel' : 'group') : 'group',
+      about,
+      photoB64: this.extractStrippedPhotoB64(chat.photo),
+    };
+  }
+
+  async resolveCampaignLink(url: string): Promise<InviteResolveResult | undefined> {
+    const target = parseCampaignLinkTarget(url);
+    if (!target) return undefined;
+
+    return target.kind === 'invite'
+      ? this.resolveInviteLink(target.value)
+      : this.resolvePublicUsername(target.value);
+  }
+
+  // Sends one compiled message to Saved Messages (own account) so the user
+  // can see exactly how the campaign content renders — one message per click
+  async sendTestMessage(text: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.client || !this.client.isConnected()) {
+      return { success: false, error: 'Telegram runner is not connected' };
+    }
+
+    const config = this.db.getConfig();
+    try {
+      const randomId = BigInt(Math.floor(Math.random() * 1e15));
+      await this.client.invoke(new GramJs.messages.SendMessage({
+        peer: new GramJs.InputPeerSelf(),
+        message: text,
+        randomId,
+        // Mirrors the campaign's preview-card behavior in the test render
+        noWebpage: !config.linkPreviewEnabled ? true : undefined,
+      }));
+      return { success: true };
+    } catch (err: any) {
+      const message = String(err?.errorMessage || err?.message || err);
+      return { success: false, error: message };
+    }
   }
 
   async sendMessage(
