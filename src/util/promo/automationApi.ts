@@ -356,6 +356,73 @@ export function sendCampaignTestMessage(text: string): Promise<{ success: boolea
   });
 }
 
+export interface CampaignListItem {
+  id: number;
+  name: string;
+  isActive: boolean;
+  updatedAt: number;
+}
+
+export function fetchCampaigns(): Promise<CampaignListItem[]> {
+  return request<CampaignListItem[]>('campaigns');
+}
+
+export function createCampaign(name: string): Promise<{ success: boolean; id: number }> {
+  return request<{ success: boolean; id: number }>('campaign/create', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function duplicateCampaign(id: number, name?: string): Promise<{ success: boolean; id: number }> {
+  return request<{ success: boolean; id: number }>('campaign/duplicate', {
+    method: 'POST',
+    body: JSON.stringify({ id, name }),
+  });
+}
+
+export function renameCampaign(id: number, name: string): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>('campaign/rename', {
+    method: 'POST',
+    body: JSON.stringify({ id, name }),
+  });
+}
+
+export function activateCampaign(id: number): Promise<{ success: boolean; campaign: AutomationCampaign }> {
+  return request<{ success: boolean; campaign: AutomationCampaign }>('campaign/activate', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  });
+}
+
+export interface CampaignPerformanceTemplate {
+  id: number;
+  title: string;
+  attempts: number;
+  successes: number;
+  errors: number;
+  floodWaits: number;
+  skips: number;
+  successRate?: number;
+}
+
+export interface CampaignPerformance {
+  since: number;
+  templates: CampaignPerformanceTemplate[];
+  hourly: { bucket: number; count: number }[];
+  topGroups: { chatId: string; chatTitle: string; attempts: number; successes: number }[];
+  links: {
+    id: number;
+    url: string;
+    resolvedMembers?: number;
+    snapshots: { members: number; checkedAt: number }[];
+  }[];
+}
+
+export function fetchCampaignPerformance(): Promise<CampaignPerformance> {
+  return request<CampaignPerformance>('campaign/performance');
+}
+
 export function fetchAutomationGroups(): Promise<AutomationGroupState[]> {
   return request<AutomationGroupState[]>('groups');
 }

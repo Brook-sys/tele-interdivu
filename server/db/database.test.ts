@@ -132,6 +132,62 @@ describe('AutomationDatabase (in-memory SQLite)', () => {
     db.close();
   });
 
+  it('manages named campaigns with duplicate, activate and rename', () => {
+    const db = new AutomationDatabase(':memory:');
+    const first = db.getCampaign();
+    db.saveCampaignTemplate({ campaignId: first.id, title: 'A', content: 'T1 {LINK}' });
+    db.saveCampaignLink({ campaignId: first.id, url: 'https://t.me/x' });
+
+    const copyId = db.duplicateCampaign(first.id, 'Cópia');
+    db.activateCampaign(copyId);
+    const active = db.getCampaign();
+    expect(active.id).toBe(copyId);
+    expect(active.name).toBe('Cópia');
+    expect(active.templates).toHaveLength(1);
+    expect(active.templates[0].content).toBe('T1 {LINK}');
+    expect(active.links).toEqual(['https://t.me/x']);
+
+    db.activateCampaign(first.id);
+    const back = db.getCampaign();
+    expect(back.id).toBe(first.id);
+    expect(back.templates[0].content).toBe('T1 {LINK}');
+
+    db.renameCampaign(first.id, 'Renomeada');
+    expect(db.getCampaigns().find((c) => c.id === first.id)?.name).toBe('Renomeada');
+    db.close();
+  });
+
+  it('computes performance aggregates from logs', () => {
+    const db = new AutomationDatabase(':memory:');
+    const now = Math.floor(Date.now() / 1000);
+    const campaignId = db.getCampaign().id;
+    const template = db.saveCampaignTemplate({ campaignId, content: 'x' });
+
+    db.addLog({
+      createdAt: now, templateId: template.id, chatId: '-1', chatTitle: 'G1',
+      messageSnippet: 'm', linkUsed: 'l', status: 'SUCCESS',
+    });
+    db.addLog({
+      createdAt: now, templateId: template.id, chatId: '-1', chatTitle: 'G1',
+      messageSnippet: 'm', linkUsed: 'l', status: 'ERROR',
+    });
+    db.addLog({
+      createdAt: now, templateId: template.id, chatId: 'system', chatTitle: 'Sistema',
+      messageSnippet: 'm', linkUsed: '', status: 'ERROR',
+    });
+
+    const templateStats = db.getTemplateStats(0);
+    expect(templateStats).toHaveLength(2);
+
+    const chatStats = db.getChatStats(0);
+    expect(chatStats[0]).toMatchObject({ chatId: '-1', attempts: 2, successes: 1 });
+
+    const hourly = db.getHourlySuccess(0);
+    expect(hourly).toHaveLength(1);
+    expect(hourly[0].count).toBe(1);
+    db.close();
+  });
+
   it('migrates the legacy single-row campaign into templates and links', () => {
     const db = new AutomationDatabase(':memory:');
     // Seed the legacy table directly (pre-migration format)

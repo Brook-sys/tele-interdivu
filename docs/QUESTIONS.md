@@ -439,3 +439,14 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     links, read-only): cada verificação é atividade de consulta na conta —
     ressava documentada. ResolveUsername + GetFullChannel cobrem links
     públicos; convites seguem por checkChatInvite.
+
+61. **Campanha fase C — campanhas nomeadas + aba Desempenho** — Seletor no
+    topo da aba Campanha com Nova/Duplicar/Renomear; ativar pede confirmação
+    explícita e a automação passa a usar a campanha no próximo envio (sem
+    restart, pois o scheduler relê a campanha ativa a cada envio; worker
+    recebe o novo conteúdo via sync do orquestrador). Aba "Desempenho":
+    sucesso por template (7d, com template_id nos logs), barras de envios
+    por hora (48h), grupos com mais tentativas e sparkline de crescimento de
+    membros por link — tudo leitura pura de banco, zero atividade no
+    Telegram. Corrigido de passagem: UPDATE sem .run() no activateCampaign
+    deixava duas campanhas ativas.

@@ -561,6 +561,120 @@ export class AutomationDatabase {
     return next;
   }
 
+  getCampaigns(): { id: number; name: string; isActive: boolean; updatedAt: number }[] {
+    const rows = this.db.prepare(
+      'SELECT id, name, is_active, updated_at FROM campaigns ORDER BY id',
+    ).all() as any[];
+    return rows.map((row) => ({
+      id: Number(row.id),
+      name: String(row.name),
+      isActive: Boolean(row.is_active),
+      updatedAt: Number(row.updated_at),
+    }));
+  }
+
+  createCampaign(name: string): number {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare(
+      'INSERT INTO campaigns (name, is_active, created_at, updated_at) VALUES (?, 0, ?, ?)',
+    ).run(name, now, now);
+    const created = this.db.prepare('SELECT id FROM campaigns ORDER BY id DESC LIMIT 1').get() as any;
+    return Number(created.id);
+  }
+
+  duplicateCampaign(sourceId: number, newName: string): number {
+    const source = this.db.prepare('SELECT * FROM campaigns WHERE id = ?').get(sourceId) as any;
+    const newId = this.createCampaign(newName || `${source?.name || 'Campanha'} (cópia)`);
+
+    const templates = this.db.prepare(
+      'SELECT * FROM campaign_templates WHERE campaign_id = ? ORDER BY position, id',
+    ).all(sourceId) as any[];
+    templates.forEach((row) => {
+      this.saveCampaignTemplate({
+        campaignId: newId,
+        title: String(row.title),
+        content: String(row.content),
+        weight: Number(row.weight),
+        isEnabled: Boolean(row.is_enabled),
+      });
+    });
+
+    const links = this.db.prepare(
+      'SELECT * FROM campaign_links WHERE campaign_id = ? ORDER BY position, id',
+    ).all(sourceId) as any[];
+    links.forEach((row) => {
+      this.saveCampaignLink({
+        campaignId: newId,
+        url: String(row.url),
+        isEnabled: Boolean(row.is_enabled),
+      });
+    });
+
+    return newId;
+  }
+
+  renameCampaign(id: number, name: string) {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare('UPDATE campaigns SET name = ?, updated_at = ? WHERE id = ?').run(name, now, id);
+  }
+
+  activateCampaign(id: number) {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare('UPDATE campaigns SET is_active = 0').run();
+    this.db.prepare('UPDATE campaigns SET is_active = 1, updated_at = ? WHERE id = ?').run(now, id);
+  }
+
+  // Logs-based aggregates for the performance dashboard
+  getTemplateStats(sinceEpoch: number): { templateId: number; status: string; count: number }[] {
+    const rows = this.db.prepare(`
+      SELECT template_id, status, COUNT(*) AS count
+      FROM logs
+      WHERE template_id IS NOT NULL AND created_at >= ?
+      GROUP BY template_id, status
+    `).all(sinceEpoch) as any[];
+    return rows.map((row) => ({
+      templateId: Number(row.template_id),
+      status: String(row.status),
+      count: Number(row.count),
+    }));
+  }
+
+  getChatStats(sinceEpoch: number): {
+    chatId: string;
+    chatTitle: string;
+    attempts: number;
+    successes: number;
+  }[] {
+    const rows = this.db.prepare(`
+      SELECT chat_id, MAX(chat_title) AS title, COUNT(*) AS attempts,
+        SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) AS successes
+      FROM logs
+      WHERE created_at >= ? AND chat_id != 'system'
+      GROUP BY chat_id
+      ORDER BY attempts DESC
+      LIMIT 20
+    `).all(sinceEpoch) as any[];
+    return rows.map((row) => ({
+      chatId: String(row.chat_id),
+      chatTitle: String(row.title),
+      attempts: Number(row.attempts),
+      successes: Number(row.successes),
+    }));
+  }
+
+  getHourlySuccess(sinceEpoch: number): { bucket: number; count: number }[] {
+    const rows = this.db.prepare(`
+      SELECT (created_at / 3600) * 3600 AS bucket, COUNT(*) AS count
+      FROM logs
+      WHERE status = 'SUCCESS' AND created_at >= ?
+      GROUP BY bucket
+    `).all(sinceEpoch) as any[];
+    return rows.map((row) => ({
+      bucket: Number(row.bucket),
+      count: Number(row.count),
+    }));
+  }
+
   migrateLegacyCampaign() {
     const existing = this.db.prepare('SELECT COUNT(*) AS count FROM campaigns').get() as any;
     if (Number(existing.count) > 0) return;

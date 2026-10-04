@@ -15,6 +15,7 @@ import { selectPromoSettings, selectPromoUserState } from '../../../global/selec
 import buildClassName from '../../../util/buildClassName';
 import { copyTextToClipboard } from '../../../util/clipboard';
 import {
+  activateCampaign,
   type AutomationCampaign,
   type AutomationCampaignLink,
   type AutomationCampaignTemplate,
@@ -22,16 +23,23 @@ import {
   type AutomationLogItem,
   type AutomationStatusResponse,
   type CampaignLinkStats,
+  type CampaignListItem,
+  type CampaignPerformance,
+  createCampaign,
   deleteCampaignLink,
   deleteCampaignTemplate,
+  duplicateCampaign,
   fetchAutomationCampaign,
   fetchAutomationDebug,
   fetchAutomationGroups,
   fetchAutomationLogs,
   fetchAutomationStatus,
   fetchCampaignLinkStats,
+  fetchCampaignPerformance,
+  fetchCampaigns,
   forceNewAutomationRound,
   reconnectAutomationTelegram,
+  renameCampaign,
   resolveCampaignLink,
   saveAutomationConfig,
   saveCampaignLink,
@@ -81,7 +89,7 @@ type StateProps = {
   promoStatusById: Record<string, PromoChatStatus>;
 };
 
-type TabType = 'campaign' | 'settings' | 'queue' | 'logs' | 'debug';
+type TabType = 'campaign' | 'performance' | 'settings' | 'queue' | 'logs' | 'debug';
 
 const STATUS_REFRESH_INTERVAL_MS = 3000;
 
@@ -134,6 +142,8 @@ const PromoAutomation = ({
   const [isTestingPreview, markTestingPreview, unmarkTestingPreview] = useFlag();
   const [trackingEnabled, setTrackingEnabled] = useState(false);
   const [trackingInterval, setTrackingInterval] = useState('6');
+  const [campaignsList, setCampaignsList] = useState<CampaignListItem[]>([]);
+  const [performanceData, setPerformanceData] = useState<CampaignPerformance | undefined>();
 
   // Settings form state
   const [mode, setMode] = useState<'manual' | 'continuous'>('manual');
@@ -178,6 +188,7 @@ const PromoAutomation = ({
         if (res.campaign) {
           setCampaign(res.campaign);
         }
+        void fetchCampaigns().then(setCampaignsList).catch(() => { /* selector falls back gracefully */ });
 
         if (res.config) {
           setMode(res.config.mode || 'manual');
@@ -203,7 +214,10 @@ const PromoAutomation = ({
         }
       }
 
-      if (activeTab === 'queue') {
+      if (activeTab === 'performance') {
+        const performance = await fetchCampaignPerformance();
+        setPerformanceData(performance);
+      } else if (activeTab === 'queue') {
         const groups = await fetchAutomationGroups();
         setGroupsData(groups);
       } else if (activeTab === 'logs') {
@@ -499,6 +513,79 @@ const PromoAutomation = ({
 
   const handleRerollPreview = useLastCallback(() => setPreviewSeed(Date.now()));
 
+  const refreshCampaignsList = useLastCallback(async () => {
+    setCampaignsList(await fetchCampaigns());
+  });
+
+  const handleActivateCampaign = useLastCallback(async (id: number) => {
+    if (id === campaign?.id) return;
+    if (!window.confirm(lang('PromoAutomationActivateConfirm'))) return;
+    setActionError(undefined);
+    try {
+      const res = await activateCampaign(id);
+      setCampaign(res.campaign);
+      await Promise.all([refreshCampaignsList(), refreshCampaign()]);
+      showSavedFeedback();
+    } catch (err: any) {
+      setActionError(err.message);
+    }
+  });
+
+  const handleCreateCampaign = useLastCallback(async () => {
+    const name = window.prompt(
+      lang('PromoAutomationNewCampaignNamePrompt'),
+      `Campanha ${campaignsList.length + 1}`,
+    );
+    if (!name?.trim()) return;
+
+    setActionError(undefined);
+    try {
+      const res = await createCampaign(name.trim());
+      // The new campaign becomes active so the editor targets it; the
+      // template editor opens right away because it starts empty
+      await activateCampaign(res.id);
+      await Promise.all([refreshCampaignsList(), refreshCampaign()]);
+      handleStartEditTemplate();
+    } catch (err: any) {
+      setActionError(err.message);
+    }
+  });
+
+  const handleDuplicateCampaign = useLastCallback(async () => {
+    if (!campaign) return;
+    // window.prompt returns null on cancel — normalize to undefined
+    const name = window.prompt(
+      lang('PromoAutomationDuplicatePrompt'),
+      `${campaign.name} (cópia)`,
+    ) ?? undefined;
+    if (name === undefined) return;
+
+    setActionError(undefined);
+    try {
+      await duplicateCampaign(campaign.id, name.trim() || undefined);
+      await refreshCampaignsList();
+      showSavedFeedback();
+    } catch (err: any) {
+      setActionError(err.message);
+    }
+  });
+
+  const handleRenameCampaign = useLastCallback(async () => {
+    if (!campaign) return;
+    const name = window.prompt(lang('PromoAutomationRenamePrompt'), campaign.name);
+    if (!name?.trim() || name.trim() === campaign.name) return;
+
+    setActionError(undefined);
+    try {
+      await renameCampaign(campaign.id, name.trim());
+      setCampaign((current) => current && { ...current, name: name.trim() });
+      await refreshCampaignsList();
+      showSavedFeedback();
+    } catch (err: any) {
+      setActionError(err.message);
+    }
+  });
+
   const handleTestSend = useLastCallback(async () => {
     if (previewMessage === undefined) return;
     setActionError(undefined);
@@ -755,6 +842,13 @@ const PromoAutomation = ({
         </button>
         <button
           type="button"
+          className={buildClassName(styles.tabBtn, activeTab === 'performance' && styles.tabBtnActive)}
+          onClick={() => setActiveTab('performance')}
+        >
+          {lang('PromoAutomationPerformanceTab')}
+        </button>
+        <button
+          type="button"
           className={buildClassName(styles.tabBtn, activeTab === 'settings' && styles.tabBtnActive)}
           onClick={() => setActiveTab('settings')}
         >
@@ -817,6 +911,30 @@ const PromoAutomation = ({
 
     return (
       <div className={styles.tabContent}>
+        <div className={styles.campaignBar}>
+          <select
+            className={styles.campaignSelect}
+            value={campaign?.id ?? 0}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => void handleActivateCampaign(Number(e.target.value))}
+          >
+            {campaignsList.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.isActive ? '● ' : '○ '}
+                {item.name}
+              </option>
+            ))}
+          </select>
+          <Button size="smaller" color="translucent" onClick={handleCreateCampaign}>
+            {lang('PromoAutomationNewCampaign')}
+          </Button>
+          <Button size="smaller" color="translucent" onClick={handleDuplicateCampaign}>
+            {lang('PromoAutomationDuplicateCampaign')}
+          </Button>
+          <Button size="smaller" color="translucent" onClick={handleRenameCampaign}>
+            {lang('PromoAutomationRenameCampaign')}
+          </Button>
+        </div>
+
         <div className={styles.sectionGroup}>
           <div className={styles.sectionHeader}>
             <span className={styles.fieldLabel}>{lang('PromoAutomationPreviewTitle')}</span>
@@ -1141,6 +1259,192 @@ const PromoAutomation = ({
               </div>
             </>
           )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderSparkline = (members: number[]) => {
+    if (members.length < 2) {
+      return <div className={styles.sparklineEmpty}>—</div>;
+    }
+
+    const min = Math.min(...members);
+    const max = Math.max(...members);
+    const range = max - min || 1;
+    const points = members
+      .map((value, index) => {
+        const x = (index / (members.length - 1)) * 100;
+        const y = 22 - ((value - min) / range) * 18;
+        return `${x},${y}`;
+      })
+      .join(' ');
+
+    return (
+      <svg viewBox="0 0 100 24" preserveAspectRatio="none" className={styles.sparkline}>
+        <polyline
+          points={points}
+          fill="none"
+          stroke="var(--color-primary)"
+          strokeWidth="2"
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+    );
+  };
+
+  const renderPerformanceTab = () => {
+    if (!performanceData) {
+      return (
+        <div className={styles.tabContent}>
+          <div className={styles.loadingWrap}>
+            <Spinner />
+          </div>
+        </div>
+      );
+    }
+
+    const { templates, hourly, topGroups, links } = performanceData;
+    const maxHourlyCount = Math.max(1, ...hourly.map((h) => h.count));
+    const templatesWithTraffic = templates.filter((t) => t.attempts > 0);
+    const growthLinks = links.filter((l) => l.snapshots.length > 0);
+
+    return (
+      <div className={styles.tabContent}>
+        <div className={styles.sectionGroup}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.fieldLabel}>{lang('PromoAutomationPerfTemplates')}</span>
+          </div>
+          {!templatesWithTraffic.length && (
+            <div className={styles.emptyText}>{lang('PromoAutomationPerfNoData')}</div>
+          )}
+          {templatesWithTraffic.map((template) => (
+            <div key={template.id} className={styles.perfRow}>
+              <div className={styles.perfRowInfo}>
+                <div className={styles.perfRowTitle}>{template.title}</div>
+                <div className={styles.perfRowMeta}>
+                  {lang(
+                    'PromoAutomationPerfAttempts',
+                    { count: template.attempts },
+                    { pluralValue: template.attempts },
+                  )}
+                  {' · '}
+                  {lang(
+                    'PromoAutomationPerfErrors',
+                    { count: template.errors + template.floodWaits },
+                    { pluralValue: template.errors + template.floodWaits },
+                  )}
+                </div>
+              </div>
+              <div className={styles.rateBarWrap}>
+                <div
+                  className={buildClassName(
+                    styles.rateFill,
+                    (template.successRate ?? 0) < 50 && styles.rateFillLow,
+                  )}
+                  style={`width: ${Math.max(2, template.successRate ?? 0)}%`}
+                />
+                <span className={styles.rateLabel}>
+                  {template.successRate ?? 0}
+                  %
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className={styles.sectionGroup}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.fieldLabel}>{lang('PromoAutomationPerfHourly')}</span>
+          </div>
+          <div className={styles.hourlyChart}>
+            {hourly.map((hour) => (
+              <div
+                key={hour.bucket}
+                className={styles.hourlyCol}
+                title={`${new Date(hour.bucket * 1000).toLocaleString(lang.code)} — ${hour.count}`}
+              >
+                <div
+                  className={styles.hourlyBar}
+                  style={`height: ${Math.round((hour.count / maxHourlyCount) * 100)}%`}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className={styles.sectionGroup}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.fieldLabel}>{lang('PromoAutomationPerfGroups')}</span>
+          </div>
+          {!topGroups.length && (
+            <div className={styles.emptyText}>{lang('PromoAutomationPerfNoData')}</div>
+          )}
+          {topGroups.map((group) => {
+            const successRate = group.attempts
+              ? Math.round((group.successes / group.attempts) * 100) : 0;
+            return (
+              <div key={group.chatId} className={styles.perfRow}>
+                <div className={styles.perfRowInfo}>
+                  <div className={styles.perfRowTitle}>{group.chatTitle}</div>
+                  <div className={styles.perfRowMeta}>
+                    {lang(
+                      'PromoAutomationPerfAttempts',
+                      { count: group.attempts },
+                      { pluralValue: group.attempts },
+                    )}
+                    {' · '}
+                    {lang(
+                      'PromoAutomationPerfSuccess',
+                      { rate: successRate },
+                    )}
+                  </div>
+                </div>
+                <div className={styles.rateBarWrap}>
+                  <div
+                    className={buildClassName(
+                      styles.rateFill,
+                      successRate < 50 && styles.rateFillLow,
+                    )}
+                    style={`width: ${Math.max(2, successRate)}%`}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className={styles.sectionGroup}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.fieldLabel}>{lang('PromoAutomationPerfGrowth')}</span>
+          </div>
+          {!growthLinks.length && (
+            <div className={styles.emptyText}>{lang('PromoAutomationPerfNoData')}</div>
+          )}
+          {growthLinks.map((link) => {
+            const members = link.snapshots.map((snapshot) => snapshot.members);
+            const firstMembers = members[members.length - 1];
+            const lastMembers = members[0];
+            const growth = lastMembers - firstMembers;
+            return (
+              <div key={link.id} className={styles.perfRow}>
+                <div className={styles.perfRowInfo}>
+                  <div className={styles.perfRowTitle}>{link.url}</div>
+                  <div className={styles.perfRowMeta}>
+                    {lang(
+                      'PromoAutomationMembersCount',
+                      { count: lastMembers },
+                      { pluralValue: lastMembers },
+                    )}
+                    {growth !== 0 && ` (${growth > 0 ? '+' : ''}${growth})`}
+                  </div>
+                </div>
+                <div className={styles.sparklineWrap}>
+                  {renderSparkline(members)}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -1544,6 +1848,7 @@ const PromoAutomation = ({
         ) : (
           <>
             {activeTab === 'campaign' && renderCampaignTab()}
+            {activeTab === 'performance' && renderPerformanceTab()}
             {activeTab === 'settings' && renderSettingsTab()}
             {activeTab === 'queue' && renderQueueTab()}
             {activeTab === 'logs' && renderLogsTab()}

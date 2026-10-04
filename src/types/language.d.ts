@@ -2430,6 +2430,19 @@ export interface LangPair {
   'PromoAutomationMemberTrackingLabel': undefined;
   'PromoAutomationMemberTrackingInterval': undefined;
   'PromoAutomationMemberTrackingHint': undefined;
+  'PromoAutomationPerformanceTab': undefined;
+  'PromoAutomationNewCampaign': undefined;
+  'PromoAutomationDuplicateCampaign': undefined;
+  'PromoAutomationRenameCampaign': undefined;
+  'PromoAutomationNewCampaignNamePrompt': undefined;
+  'PromoAutomationRenamePrompt': undefined;
+  'PromoAutomationDuplicatePrompt': undefined;
+  'PromoAutomationActivateConfirm': undefined;
+  'PromoAutomationPerfTemplates': undefined;
+  'PromoAutomationPerfHourly': undefined;
+  'PromoAutomationPerfGroups': undefined;
+  'PromoAutomationPerfGrowth': undefined;
+  'PromoAutomationPerfNoData': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4145,6 +4158,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'SettingsLanguageDesc': {
     'language': V;
   };
+  'PromoAutomationPerfSuccess': {
+    'rate': V;
+  };
 }
 
 export interface LangPairPlural {
@@ -4700,6 +4716,12 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'PromoAutomationMembersCount': {
+    'count': V;
+  };
+  'PromoAutomationPerfAttempts': {
+    'count': V;
+  };
+  'PromoAutomationPerfErrors': {
     'count': V;
   };
 }

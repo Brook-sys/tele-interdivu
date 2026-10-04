@@ -514,6 +514,115 @@ export function createApiHandler(
         return true;
       }
 
+      // 5i. Named campaigns management
+      if (route === 'campaigns' && method === 'GET') {
+        sendJson(res, 200, db.getCampaigns());
+        return true;
+      }
+      if (route === 'campaign/create' && method === 'POST') {
+        const body = await readJsonBody<{ name?: string }>(req);
+        const id = db.createCampaign((body.name || '').trim() || `Campanha ${db.getCampaigns().length + 1}`);
+        sendJson(res, 200, { success: true, id });
+        return true;
+      }
+      if (route === 'campaign/duplicate' && method === 'POST') {
+        const body = await readJsonBody<{ id: number; name?: string }>(req);
+        if (!body.id) {
+          sendError(res, 400, 'id is required');
+          return true;
+        }
+        const id = db.duplicateCampaign(Number(body.id), (body.name || '').trim());
+        sendJson(res, 200, { success: true, id });
+        return true;
+      }
+      if (route === 'campaign/rename' && method === 'POST') {
+        const body = await readJsonBody<{ id: number; name: string }>(req);
+        if (!body.id || !body.name?.trim()) {
+          sendError(res, 400, 'id and name are required');
+          return true;
+        }
+        db.renameCampaign(Number(body.id), body.name.trim());
+        sendJson(res, 200, { success: true });
+        return true;
+      }
+      if (route === 'campaign/activate' && method === 'POST') {
+        const body = await readJsonBody<{ id: number }>(req);
+        if (!body.id) {
+          sendError(res, 400, 'id is required');
+          return true;
+        }
+        const campaigns = db.getCampaigns();
+        if (!campaigns.some((c) => c.id === Number(body.id))) {
+          sendError(res, 404, 'Campaign not found');
+          return true;
+        }
+        db.activateCampaign(Number(body.id));
+        sendJson(res, 200, { success: true, campaign: db.getCampaign() });
+        return true;
+      }
+
+      // 5j. GET campaign/performance — logs-based dashboard aggregates
+      // (zero Telegram activity, pure DB reads)
+      if (route === 'campaign/performance' && method === 'GET') {
+        const now = Math.floor(Date.now() / 1000);
+        const sinceWeek = now - 7 * 86_400;
+        const since48h = now - 48 * 3_600;
+
+        const campaign = db.getCampaign();
+        const templateStats = db.getTemplateStats(sinceWeek);
+
+        const templates = campaign.templates.map((template) => {
+          const rows = templateStats.filter((row) => row.templateId === template.id);
+          const attempts = rows.reduce((sum, row) => sum + row.count, 0);
+          const successes = rows
+            .filter((row) => row.status === 'SUCCESS')
+            .reduce((sum, row) => sum + row.count, 0);
+          const errors = rows
+            .filter((row) => row.status === 'ERROR')
+            .reduce((sum, row) => sum + row.count, 0);
+          const floodWaits = rows
+            .filter((row) => row.status === 'FLOOD_WAIT')
+            .reduce((sum, row) => sum + row.count, 0);
+          const skips = rows
+            .filter((row) => row.status === 'SKIPPED')
+            .reduce((sum, row) => sum + row.count, 0);
+          return {
+            id: template.id,
+            title: template.title || template.content.slice(0, 30),
+            attempts,
+            successes,
+            errors,
+            floodWaits,
+            skips,
+            successRate: attempts ? Math.round((successes / attempts) * 100) : undefined,
+          };
+        });
+
+        const hourlyRaw = db.getHourlySuccess(since48h);
+        const hourlyMap = new Map(hourlyRaw.map((row) => [row.bucket, row.count]));
+        const hourly: { bucket: number; count: number }[] = [];
+        const firstBucket = Math.ceil(since48h / 3600) * 3600;
+        for (let bucket = firstBucket; bucket <= now; bucket += 3600) {
+          hourly.push({ bucket, count: hourlyMap.get(bucket) ?? 0 });
+        }
+
+        const links = campaign.allLinks.map((link) => ({
+          id: link.id,
+          url: link.url,
+          resolvedMembers: link.resolvedMembers,
+          snapshots: db.getLinkSnapshots(link.id, 30),
+        }));
+
+        sendJson(res, 200, {
+          since: sinceWeek,
+          templates,
+          hourly,
+          topGroups: db.getChatStats(sinceWeek),
+          links,
+        });
+        return true;
+      }
+
       // 5h. POST campaign/test-send — one real message to Saved Messages
       // so the user sees exactly how the content renders (1 per cooldown)
       if (route === 'campaign/test-send' && method === 'POST') {

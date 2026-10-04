@@ -259,3 +259,19 @@ environment:
   re-checks enabled t.me links in the background, paced ~4s apart. Each
   check is read-only but is still account activity; keep it off unless the
   growth curve matters to you.
+
+### Named campaigns & performance dashboard
+
+- `GET campaigns` — list `{ id, name, isActive, updatedAt }`.
+- `POST campaign/create` body `{ name? }` — creates an inactive empty
+  campaign (default name `Campanha N`).
+- `POST campaign/duplicate` body `{ id, name? }` — deep-copies templates and
+  links of `id` into a new inactive campaign.
+- `POST campaign/rename` body `{ id, name }`.
+- `POST campaign/activate` body `{ id }` — single active campaign invariant;
+  the scheduler picks the new content on the next send (no restart needed).
+  Returns the refreshed active campaign.
+- `GET campaign/performance` — pure-DB aggregates for the dashboard: per
+  template attempts/successes/errors over 7 days (from `logs.template_id`),
+  hourly success buckets for the last 48h, top-20 groups by attempts with
+  success rate, and up to 30 member snapshots per link for growth sparklines.

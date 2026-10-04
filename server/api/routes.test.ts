@@ -160,6 +160,58 @@ describe('Automation REST API routes', () => {
     expect(offline.status).toBe(503);
   });
 
+  it('manages named campaigns via API', async () => {
+    const initial = await api('campaign');
+    const initialActiveId = initial.data.id;
+
+    const created = await api('campaign/create', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'API Campaign' }),
+    });
+    expect(created.status).toBe(200);
+    expect(created.data.id).toBeTruthy();
+
+    const activated = await api('campaign/activate', {
+      method: 'POST',
+      body: JSON.stringify({ id: created.data.id }),
+    });
+    expect(activated.status).toBe(200);
+    expect(activated.data.campaign.id).toBe(created.data.id);
+    expect((await api('campaign')).data.id).toBe(created.data.id);
+
+    const renamed = await api('campaign/rename', {
+      method: 'POST',
+      body: JSON.stringify({ id: created.data.id, name: 'API Campaign 2' }),
+    });
+    expect(renamed.status).toBe(200);
+
+    const list = await api('campaigns');
+    expect(list.status).toBe(200);
+    expect(list.data.some((c: any) => c.name === 'API Campaign 2')).toBe(true);
+
+    const badActivate = await api('campaign/activate', {
+      method: 'POST',
+      body: JSON.stringify({ id: 987654 }),
+    });
+    expect(badActivate.status).toBe(404);
+
+    // Restore the original active campaign for the remaining tests
+    await api('campaign/activate', {
+      method: 'POST',
+      body: JSON.stringify({ id: initialActiveId }),
+    });
+  });
+
+  it('returns performance aggregates', async () => {
+    const res = await api('campaign/performance');
+    expect(res.status).toBe(200);
+    expect(res.data).toHaveProperty('templates');
+    expect(res.data).toHaveProperty('hourly');
+    expect(res.data).toHaveProperty('topGroups');
+    expect(Array.isArray(res.data.hourly)).toBe(true);
+    expect(Array.isArray(res.data.links)).toBe(true);
+  });
+
   it('POST test-spintax generates 5 previews', async () => {
     const res = await api('test-spintax', {
       method: 'POST',
