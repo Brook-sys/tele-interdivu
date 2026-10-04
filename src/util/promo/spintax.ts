@@ -1,10 +1,14 @@
+// Client-side mirror of server/automation/spintax.ts — powers instant
+// preview, validation and variation counting in the campaign editor
+// without a round-trip per keystroke. The server remains authoritative
+// at send time.
+
 export function parseSpintax(text: string): string {
   if (!text) return '';
 
   let current = text;
   const regex = /\{([^{}]+)\}/;
 
-  // Resolves inner-most braces iteratively until none remain
   while (regex.test(current)) {
     current = current.replace(regex, (_, choicesString: string) => {
       const choices = choicesString.split('|');
@@ -32,12 +36,7 @@ export function compileSpunMessage(
     }
   }
 
-  const spun = parseSpintax(text);
-
-  return {
-    messageText: spun,
-    linkUsed,
-  };
+  return { messageText: parseSpintax(text), linkUsed };
 }
 
 export function validateSpintaxSyntax(text: string): { isValid: boolean; error?: string } {
@@ -47,19 +46,19 @@ export function validateSpintaxSyntax(text: string): { isValid: boolean; error?:
     else if (text[i] === '}') {
       depth--;
       if (depth < 0) {
-        return { isValid: false, error: `Closing brace '}' without opening at index ${i}` };
+        return { isValid: false, error: `'} sem '{' correspondente na posição ${i}` };
       }
     }
   }
 
   if (depth !== 0) {
-    return { isValid: false, error: `${depth} unclosed brace(s) '{'` };
+    return { isValid: false, error: `${depth} chave(s) '{' sem fechar` };
   }
 
   return { isValid: true };
 }
 
-// Picks the template for a send: first enabled when rotation is off,
+// Picks the template for a preview: first enabled when rotation is off,
 // weighted-random among enabled ones when rotation is on (A/B testing)
 export function pickTemplate<T extends { weight: number; isEnabled: boolean }>(
   templates: T[],

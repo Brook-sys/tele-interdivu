@@ -221,3 +221,21 @@ environment:
   convite via `messages.CheckChatInvite` (read-only) e registra
   título/membros/tipo/about/foto-stripped na linha. 410 quando o convite está
   expirado/inválido (fica registrado para não esgotar re-tentativas).
+
+### Campaign CRUD (multiple templates + per-link toggles)
+
+- `GET campaign` — returns the active campaign as `{ id, name, spintaxTemplate,
+  templates[], links[], allLinks[], updatedAt }`. `templates[]` items:
+  `{ id, title, content, weight, isEnabled, position }`; `allLinks[]`:
+  `{ id, url, isEnabled, position }`; `links` = urls of enabled links.
+- `POST campaign/templates` body `{ id?, title?, content, weight?, isEnabled? }`
+  — upserts a template of the active campaign (spintax validated, weight
+  clamped to ≥ 1). `id` omitted = create.
+- `DELETE campaign/templates/{id}`
+- `POST campaign/links` body `{ id?, url, isEnabled? }`
+- `DELETE campaign/links/{id}`
+- `POST campaign` (legacy) body `{ spintaxTemplate, links }` — replaces the
+  whole active campaign content with a single template; kept for old clients.
+- Config flag `templateRotationEnabled` (`POST config`): when true the
+  scheduler picks a random enabled template weighted by `weight` per send;
+  when false (default) it always uses the first enabled template.

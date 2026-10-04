@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { compileSpunMessage, parseSpintax, validateSpintaxSyntax } from './spintax';
+import {
+  compileSpunMessage,
+  countMessageVariations,
+  parseSpintax,
+  pickTemplate,
+  validateSpintaxSyntax,
+} from './spintax';
 
 describe('spintax parser', () => {
   it('parses simple flat spintax', () => {
@@ -52,5 +58,70 @@ describe('spintax parser', () => {
     expect(validateSpintaxSyntax('{Oi {amigo|parceiro}|Olá}').isValid).toBe(true);
     expect(validateSpintaxSyntax('{Oi|Olá').isValid).toBe(false);
     expect(validateSpintaxSyntax('Oi|Olá}').isValid).toBe(false);
+  });
+});
+
+describe('pickTemplate', () => {
+  it('returns the first enabled template when rotation is off', () => {
+    const templates = [
+      { weight: 1, isEnabled: false, content: 'a' },
+      { weight: 1, isEnabled: true, content: 'b' },
+      { weight: 1, isEnabled: true, content: 'c' },
+    ];
+    expect(pickTemplate(templates, false)?.content).toBe('b');
+  });
+
+  it('returns undefined when no template is enabled', () => {
+    expect(pickTemplate([{ weight: 1, isEnabled: false, content: 'a' }], false)).toBeUndefined();
+  });
+
+  it('picks weighted-random among enabled templates when rotation is on', () => {
+    const templates = [
+      { weight: 1, isEnabled: true, content: 'a' },
+      { weight: 3, isEnabled: true, content: 'b' },
+      { weight: 1, isEnabled: false, content: 'disabled' },
+    ];
+
+    const counts = { a: 0, b: 0 };
+    for (let i = 0; i < 4000; i++) {
+      const picked = pickTemplate(templates, true);
+      counts[picked!.content as 'a' | 'b']++;
+    }
+
+    // Roughly 25% / 75% split with a tolerance band for randomness
+    expect(counts.a).toBeGreaterThan(700);
+    expect(counts.a).toBeLessThan(1300);
+    expect(counts.b).toBeGreaterThan(2700);
+  });
+
+  it('treats weight below 1 as 1 so a template is never impossible to pick', () => {
+    const templates = [
+      { weight: 0, isEnabled: true, content: 'a' },
+      { weight: 5, isEnabled: true, content: 'b' },
+    ];
+    const picks = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      picks.add(pickTemplate(templates, true)!.content);
+    }
+    expect(picks.has('a')).toBe(true);
+  });
+});
+
+describe('countMessageVariations', () => {
+  it('multiplies flat groups and links', () => {
+    expect(countMessageVariations('{a|b} {c|d|e}', ['l1', 'l2'])).toBe(12);
+  });
+
+  it('sums nested choices instead of multiplying them', () => {
+    // {a|{b|c}} produces a, b or c = 3 distinct outcomes
+    expect(countMessageVariations('{a|{b|c}}', [])).toBe(3);
+  });
+
+  it('counts empty choices as valid variations', () => {
+    expect(countMessageVariations('{a|}', [])).toBe(2);
+  });
+
+  it('returns 1 for a template without groups or links', () => {
+    expect(countMessageVariations('mensagem fixa', [])).toBe(1);
   });
 });

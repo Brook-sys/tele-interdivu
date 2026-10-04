@@ -138,10 +138,14 @@ export function createOrchestratorHandler(
             microPauseEveryMax: config.microPauseEveryMax,
             microPauseSeconds: config.microPauseSeconds,
             extractorEnabled: config.extractorEnabled,
+            templateRotationEnabled: config.templateRotationEnabled,
           },
           desiredCampaign: {
+            // Legacy fields kept so workers on older images keep working
             spintaxTemplate: campaign.spintaxTemplate,
             links: campaign.links,
+            templates: campaign.templates,
+            allLinks: campaign.allLinks,
           },
         });
         return true;

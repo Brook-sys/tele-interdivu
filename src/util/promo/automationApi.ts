@@ -52,12 +52,37 @@ export interface AutomationStatusResponse {
     microPauseEveryMax?: number;
     microPauseSeconds?: number;
     extractorEnabled?: boolean;
+    templateRotationEnabled?: boolean;
   };
-  campaign: {
-    spintaxTemplate: string;
-    links: string[];
-    updatedAt: number;
-  };
+  campaign: AutomationCampaign;
+}
+
+export interface AutomationCampaignTemplate {
+  id: number;
+  title: string;
+  content: string;
+  weight: number;
+  isEnabled: boolean;
+  position: number;
+  updatedAt: number;
+}
+
+export interface AutomationCampaignLink {
+  id: number;
+  url: string;
+  isEnabled: boolean;
+  position: number;
+  updatedAt: number;
+}
+
+export interface AutomationCampaign {
+  id: number;
+  name: string;
+  spintaxTemplate: string;
+  templates: AutomationCampaignTemplate[];
+  links: string[];
+  allLinks: AutomationCampaignLink[];
+  updatedAt: number;
 }
 
 export interface AutomationGroupState {
@@ -258,10 +283,41 @@ export function saveAutomationConfig(patch: Partial<AutomationStatusResponse['co
   });
 }
 
-export function saveAutomationCampaign(spintaxTemplate: string, links: string[]): Promise<any> {
-  return request('campaign', {
+export function fetchAutomationCampaign(): Promise<AutomationCampaign> {
+  return request<AutomationCampaign>('campaign');
+}
+
+export function saveCampaignTemplate(template: {
+  id?: number;
+  title?: string;
+  content: string;
+  weight?: number;
+  isEnabled?: boolean;
+}): Promise<AutomationCampaignTemplate> {
+  return request<AutomationCampaignTemplate>('campaign/templates', {
     method: 'POST',
-    body: JSON.stringify({ spintaxTemplate, links }),
+    body: JSON.stringify(template),
+  });
+}
+
+export function deleteCampaignTemplate(id: number): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`campaign/templates/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export function saveCampaignLink(
+  link: { id?: number; url: string; isEnabled?: boolean },
+): Promise<AutomationCampaignLink> {
+  return request<AutomationCampaignLink>('campaign/links', {
+    method: 'POST',
+    body: JSON.stringify(link),
+  });
+}
+
+export function deleteCampaignLink(id: number): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`campaign/links/${id}`, {
+    method: 'DELETE',
   });
 }
 
@@ -271,16 +327,6 @@ export function fetchAutomationGroups(): Promise<AutomationGroupState[]> {
 
 export function fetchAutomationLogs(limit = 50): Promise<AutomationLogItem[]> {
   return request<AutomationLogItem[]>(`logs?limit=${limit}`);
-}
-
-export function testSpintaxPreviews(
-  template: string,
-  links: string[],
-): Promise<{ previews: { messageText: string; linkUsed: string }[] }> {
-  return request<{ previews: { messageText: string; linkUsed: string }[] }>('test-spintax', {
-    method: 'POST',
-    body: JSON.stringify({ template, links }),
-  });
 }
 
 export function skipAutomationPause(): Promise<{ success: boolean; message: string }> {

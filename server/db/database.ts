@@ -23,11 +23,36 @@ export interface AutomationDbConfig {
   microPauseEveryMax: number;
   microPauseSeconds: number;
   extractorEnabled: boolean;
+  templateRotationEnabled: boolean;
+}
+
+export interface CampaignTemplateRecord {
+  id: number;
+  title: string;
+  content: string;
+  weight: number;
+  isEnabled: boolean;
+  position: number;
+  updatedAt: number;
+}
+
+export interface CampaignLinkRecord {
+  id: number;
+  url: string;
+  isEnabled: boolean;
+  position: number;
+  updatedAt: number;
 }
 
 export interface AutomationCampaign {
+  id: number;
+  name: string;
+  // Content of the first enabled template (convenience/compat field)
   spintaxTemplate: string;
+  templates: CampaignTemplateRecord[];
+  // Enabled link urls (convenience/compat field)
   links: string[];
+  allLinks: CampaignLinkRecord[];
   updatedAt: number;
 }
 
@@ -48,6 +73,7 @@ export interface GroupStateRecord {
 export interface AutomationLogRecord {
   id?: number;
   createdAt: number;
+  templateId?: number;
   chatId: string;
   chatTitle: string;
   messageSnippet: string;
@@ -96,6 +122,7 @@ export const DEFAULT_CONFIG: AutomationDbConfig = {
   microPauseEveryMax: 10,
   microPauseSeconds: 300,
   extractorEnabled: true,
+  templateRotationEnabled: false,
 };
 
 export class AutomationDatabase {
@@ -149,6 +176,34 @@ export class AutomationDatabase {
         updated_at INTEGER NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS campaigns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS campaign_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id INTEGER NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL,
+        weight INTEGER NOT NULL DEFAULT 1,
+        is_enabled INTEGER NOT NULL DEFAULT 1,
+        position INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS campaign_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id INTEGER NOT NULL,
+        url TEXT NOT NULL,
+        is_enabled INTEGER NOT NULL DEFAULT 1,
+        position INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS session (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         session_json TEXT NOT NULL,
@@ -172,6 +227,7 @@ export class AutomationDatabase {
       CREATE TABLE IF NOT EXISTS logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         created_at INTEGER NOT NULL,
+        template_id INTEGER,
         chat_id TEXT NOT NULL,
         chat_title TEXT NOT NULL,
         message_snippet TEXT NOT NULL,
@@ -285,6 +341,18 @@ export class AutomationDatabase {
       // Column already exists
     }
 
+    try {
+      this.db.exec('ALTER TABLE config ADD COLUMN template_rotation_enabled INTEGER NOT NULL DEFAULT 0');
+    } catch {
+      // Column already exists
+    }
+
+    try {
+      this.db.exec('ALTER TABLE logs ADD COLUMN template_id INTEGER');
+    } catch {
+      // Column already exists
+    }
+
     for (const ddl of [
       'ALTER TABLE extracted_items ADD COLUMN resolved_title TEXT',
       'ALTER TABLE extracted_items ADD COLUMN resolved_members INTEGER',
@@ -312,6 +380,9 @@ export class AutomationDatabase {
     } catch {
       // ignore
     }
+
+    // Seed the new campaign tables from the legacy single-row format
+    this.migrateLegacyCampaign();
 
     // Ensure initial config row exists
     const row = this.db.prepare('SELECT id FROM config WHERE id = 1').get();
@@ -369,6 +440,8 @@ export class AutomationDatabase {
       microPauseSeconds: Number(row.micro_pause_seconds ?? DEFAULT_CONFIG.microPauseSeconds),
       extractorEnabled: row.extractor_enabled === undefined
         ? DEFAULT_CONFIG.extractorEnabled : Boolean(row.extractor_enabled),
+      templateRotationEnabled: row.template_rotation_enabled === undefined
+        ? DEFAULT_CONFIG.templateRotationEnabled : Boolean(row.template_rotation_enabled),
     };
   }
 
@@ -394,7 +467,8 @@ export class AutomationDatabase {
         micro_pause_every_min = ?,
         micro_pause_every_max = ?,
         micro_pause_seconds = ?,
-        extractor_enabled = ?
+        extractor_enabled = ?,
+        template_rotation_enabled = ?
       WHERE id = 1
     `).run(
       next.mode,
@@ -414,52 +488,219 @@ export class AutomationDatabase {
       next.microPauseEveryMax,
       next.microPauseSeconds,
       next.extractorEnabled ? 1 : 0,
+      next.templateRotationEnabled ? 1 : 0,
     );
 
     return next;
   }
 
-  getCampaign(): AutomationCampaign {
-    const row = this.db.prepare('SELECT * FROM campaign WHERE id = 1').get() as any;
-    if (!row) {
-      return {
-        spintaxTemplate: '',
-        links: [],
-        updatedAt: 0,
-      };
+  migrateLegacyCampaign() {
+    const existing = this.db.prepare('SELECT COUNT(*) AS count FROM campaigns').get() as any;
+    if (Number(existing.count) > 0) return;
+
+    const campaignId = this.getOrCreateActiveCampaignId();
+
+    const legacy = this.db.prepare('SELECT * FROM campaign WHERE id = 1').get() as any;
+    if (!legacy) return;
+
+    if (legacy.spintax_template) {
+      this.saveCampaignTemplate({
+        campaignId,
+        title: 'Principal',
+        content: String(legacy.spintax_template),
+      });
     }
 
-    let links: string[];
     try {
-      const parsed = JSON.parse(row.links_json);
-      links = Array.isArray(parsed) ? parsed : [];
+      const parsed = JSON.parse(String(legacy.links_json));
+      const links = Array.isArray(parsed) ? parsed : [];
+      links.forEach((url) => this.saveCampaignLink({ campaignId, url: String(url) }));
     } catch {
-      links = [];
+      // No legacy links to migrate
+    }
+  }
+
+  private getOrCreateActiveCampaignId(): number {
+    const active = this.db.prepare(
+      'SELECT id FROM campaigns WHERE is_active = 1 ORDER BY id LIMIT 1',
+    ).get() as any;
+    if (active) return Number(active.id);
+
+    const any = this.db.prepare('SELECT id FROM campaigns ORDER BY id LIMIT 1').get() as any;
+    if (any) {
+      this.db.prepare('UPDATE campaigns SET is_active = 1 WHERE id = ?').run(any.id);
+      return Number(any.id);
     }
 
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare(
+      'INSERT INTO campaigns (name, is_active, created_at, updated_at) VALUES (?, 1, ?, ?)',
+    ).run('Padrão', now, now);
+    const created = this.db.prepare('SELECT id FROM campaigns ORDER BY id DESC LIMIT 1').get() as any;
+    return Number(created.id);
+  }
+
+  private touchCampaign(campaignId: number) {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare('UPDATE campaigns SET updated_at = ? WHERE id = ?').run(now, campaignId);
+  }
+
+  private mapTemplateRow(row: any): CampaignTemplateRecord {
     return {
-      spintaxTemplate: String(row.spintax_template),
-      links,
+      id: Number(row.id),
+      title: String(row.title),
+      content: String(row.content),
+      weight: Number(row.weight),
+      isEnabled: Boolean(row.is_enabled),
+      position: Number(row.position),
       updatedAt: Number(row.updated_at),
     };
   }
 
-  saveCampaign(spintaxTemplate: string, links: string[]): AutomationCampaign {
-    const now = Math.floor(Date.now() / 1000);
-    this.db.prepare(`
-      INSERT INTO campaign (id, spintax_template, links_json, updated_at)
-      VALUES (1, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        spintax_template = excluded.spintax_template,
-        links_json = excluded.links_json,
-        updated_at = excluded.updated_at
-    `).run(spintaxTemplate, JSON.stringify(links), now);
+  private mapLinkRow(row: any): CampaignLinkRecord {
+    return {
+      id: Number(row.id),
+      url: String(row.url),
+      isEnabled: Boolean(row.is_enabled),
+      position: Number(row.position),
+      updatedAt: Number(row.updated_at),
+    };
+  }
+
+  getCampaign(): AutomationCampaign {
+    const campaignId = this.getOrCreateActiveCampaignId();
+    const campaignRow = this.db.prepare(
+      'SELECT * FROM campaigns WHERE id = ?',
+    ).get(campaignId) as any;
+
+    const templates = (this.db.prepare(
+      'SELECT * FROM campaign_templates WHERE campaign_id = ? ORDER BY position, id',
+    ).all(campaignId) as any[]).map((row) => this.mapTemplateRow(row));
+
+    const allLinks = (this.db.prepare(
+      'SELECT * FROM campaign_links WHERE campaign_id = ? ORDER BY position, id',
+    ).all(campaignId) as any[]).map((row) => this.mapLinkRow(row));
+
+    const firstTemplate = templates.find((t) => t.isEnabled);
 
     return {
-      spintaxTemplate,
-      links,
-      updatedAt: now,
+      id: campaignId,
+      name: String(campaignRow.name),
+      spintaxTemplate: firstTemplate?.content ?? '',
+      templates,
+      links: allLinks.filter((l) => l.isEnabled).map((l) => l.url),
+      allLinks,
+      updatedAt: Number(campaignRow.updated_at),
     };
+  }
+
+  saveCampaignTemplate(template: {
+    id?: number;
+    campaignId: number;
+    title?: string;
+    content: string;
+    weight?: number;
+    isEnabled?: boolean;
+  }): CampaignTemplateRecord {
+    const now = Math.floor(Date.now() / 1000);
+
+    if (template.id) {
+      this.db.prepare(`
+        UPDATE campaign_templates SET
+          title = ?, content = ?, weight = ?, is_enabled = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        template.title ?? '',
+        template.content,
+        Math.max(1, Number(template.weight ?? 1)),
+        template.isEnabled === false ? 0 : 1,
+        now,
+        template.id,
+      );
+      this.touchCampaign(template.campaignId);
+    } else {
+      const posRow = this.db.prepare(
+        'SELECT COALESCE(MAX(position), -1) + 1 AS next FROM campaign_templates WHERE campaign_id = ?',
+      ).get(template.campaignId) as any;
+      this.db.prepare(`
+        INSERT INTO campaign_templates (campaign_id, title, content, weight, is_enabled, position, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        template.campaignId,
+        template.title ?? '',
+        template.content,
+        Math.max(1, Number(template.weight ?? 1)),
+        template.isEnabled === false ? 0 : 1,
+        Number(posRow.next),
+        now,
+      );
+      this.touchCampaign(template.campaignId);
+    }
+
+    const row = template.id
+      ? this.db.prepare('SELECT * FROM campaign_templates WHERE id = ?').get(template.id)
+      : this.db.prepare(
+        'SELECT * FROM campaign_templates WHERE campaign_id = ? ORDER BY id DESC LIMIT 1',
+      ).get(template.campaignId);
+    return this.mapTemplateRow(row);
+  }
+
+  deleteCampaignTemplate(id: number) {
+    this.db.prepare('DELETE FROM campaign_templates WHERE id = ?').run(id);
+  }
+
+  saveCampaignLink(link: { id?: number; campaignId: number; url: string; isEnabled?: boolean }): CampaignLinkRecord {
+    const now = Math.floor(Date.now() / 1000);
+
+    if (link.id) {
+      this.db.prepare(`
+        UPDATE campaign_links SET url = ?, is_enabled = ?, updated_at = ? WHERE id = ?
+      `).run(link.url, link.isEnabled === false ? 0 : 1, now, link.id);
+      this.touchCampaign(link.campaignId);
+    } else {
+      const posRow = this.db.prepare(
+        'SELECT COALESCE(MAX(position), -1) + 1 AS next FROM campaign_links WHERE campaign_id = ?',
+      ).get(link.campaignId) as any;
+      this.db.prepare(`
+        INSERT INTO campaign_links (campaign_id, url, is_enabled, position, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(link.campaignId, link.url, link.isEnabled === false ? 0 : 1, Number(posRow.next), now);
+      this.touchCampaign(link.campaignId);
+    }
+
+    const row = link.id
+      ? this.db.prepare('SELECT * FROM campaign_links WHERE id = ?').get(link.id)
+      : this.db.prepare(
+        'SELECT * FROM campaign_links WHERE campaign_id = ? ORDER BY id DESC LIMIT 1',
+      ).get(link.campaignId);
+    return this.mapLinkRow(row);
+  }
+
+  deleteCampaignLink(id: number) {
+    this.db.prepare('DELETE FROM campaign_links WHERE id = ?').run(id);
+  }
+
+  // Full content replace — used to sync a worker with the master's campaign
+  replaceCampaignContent(
+    campaignId: number,
+    templates: { title?: string; content: string; weight?: number; isEnabled?: boolean }[],
+    links: { url: string; isEnabled?: boolean }[],
+  ) {
+    this.db.prepare('DELETE FROM campaign_templates WHERE campaign_id = ?').run(campaignId);
+    this.db.prepare('DELETE FROM campaign_links WHERE campaign_id = ?').run(campaignId);
+    templates.forEach((template) => this.saveCampaignTemplate({ campaignId, ...template }));
+    links.forEach((link) => this.saveCampaignLink({ campaignId, ...link }));
+  }
+
+  // Legacy single-template save (kept for backward-compatible sync payloads)
+  saveCampaign(spintaxTemplate: string, links: string[]): AutomationCampaign {
+    const campaignId = this.getOrCreateActiveCampaignId();
+    this.replaceCampaignContent(
+      campaignId,
+      spintaxTemplate ? [{ title: 'Principal', content: spintaxTemplate }] : [],
+      links.map((url) => ({ url })),
+    );
+    return this.getCampaign();
   }
 
   getSession(): string | undefined {
@@ -620,10 +861,11 @@ export class AutomationDatabase {
 
   addLog(log: AutomationLogRecord) {
     this.db.prepare(`
-      INSERT INTO logs (created_at, chat_id, chat_title, message_snippet, link_used, status, details)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO logs (created_at, template_id, chat_id, chat_title, message_snippet, link_used, status, details)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       log.createdAt,
+      log.templateId ?? null,
       log.chatId,
       log.chatTitle,
       log.messageSnippet,
@@ -638,6 +880,8 @@ export class AutomationDatabase {
     return rows.map((row) => ({
       id: Number(row.id),
       createdAt: Number(row.created_at),
+      templateId: row.template_id !== null && row.template_id !== undefined
+        ? Number(row.template_id) : undefined,
       chatId: String(row.chat_id),
       chatTitle: String(row.chat_title),
       messageSnippet: String(row.message_snippet),

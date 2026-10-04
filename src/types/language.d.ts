@@ -2403,6 +2403,26 @@ export interface LangPair {
   'PromoExtractInviteInvalid': undefined;
   'PromoExtractTypeChannel': undefined;
   'PromoExtractTypeGroup': undefined;
+  'PromoAutomationPreviewTitle': undefined;
+  'PromoAutomationReroll': undefined;
+  'PromoAutomationVariationsHint': undefined;
+  'PromoAutomationVarietyLow': undefined;
+  'PromoAutomationTemplatesLabel': undefined;
+  'PromoAutomationNewTemplate': undefined;
+  'PromoAutomationTemplateTitle': undefined;
+  'PromoAutomationTemplateWeight': undefined;
+  'PromoAutomationUntitledTemplate': undefined;
+  'PromoAutomationRotationLabel': undefined;
+  'PromoAutomationEdit': undefined;
+  'PromoAutomationDelete': undefined;
+  'PromoAutomationCancel': undefined;
+  'PromoAutomationDeleteTemplateConfirm': undefined;
+  'PromoAutomationNoTemplates': undefined;
+  'PromoAutomationNoLinks': undefined;
+  'PromoAutomationAddLink': undefined;
+  'PromoAutomationLinkUrlPlaceholder': undefined;
+  'PromoAutomationCopyLink': undefined;
+  'PromoAutomationLinkCopied': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4661,6 +4681,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'PromoExtractMembers': {
+    'count': V;
+  };
+  'PromoAutomationVariations': {
     'count': V;
   };
 }

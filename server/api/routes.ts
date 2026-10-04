@@ -369,6 +369,73 @@ export function createApiHandler(
         }
       }
 
+      // 5b. POST campaign/templates — upsert a template of the active campaign
+      if (route === 'campaign/templates' && method === 'POST') {
+        const body = await readJsonBody<{
+          id?: number;
+          title?: string;
+          content: string;
+          weight?: number;
+          isEnabled?: boolean;
+        }>(req);
+        const validation = validateSpintaxSyntax(body.content || '');
+        if (!validation.isValid) {
+          sendError(res, 400, `Spintax syntax error: ${validation.error}`);
+          return true;
+        }
+        const saved = db.saveCampaignTemplate({
+          id: body.id,
+          campaignId: db.getCampaign().id,
+          title: body.title,
+          content: body.content,
+          weight: body.weight,
+          isEnabled: body.isEnabled,
+        });
+        sendJson(res, 200, saved);
+        return true;
+      }
+
+      // 5c. DELETE campaign/templates/{id}
+      if (route.startsWith('campaign/templates/') && method === 'DELETE') {
+        const id = Number(route.slice('campaign/templates/'.length));
+        if (!id) {
+          sendError(res, 400, 'Invalid template id');
+          return true;
+        }
+        db.deleteCampaignTemplate(id);
+        sendJson(res, 200, { success: true, deleted: id });
+        return true;
+      }
+
+      // 5d. POST campaign/links — upsert a link of the active campaign
+      if (route === 'campaign/links' && method === 'POST') {
+        const body = await readJsonBody<{ id?: number; url: string; isEnabled?: boolean }>(req);
+        if (!body.url || !body.url.trim()) {
+          sendError(res, 400, 'url is required');
+          return true;
+        }
+        const saved = db.saveCampaignLink({
+          id: body.id,
+          campaignId: db.getCampaign().id,
+          url: body.url.trim(),
+          isEnabled: body.isEnabled,
+        });
+        sendJson(res, 200, saved);
+        return true;
+      }
+
+      // 5e. DELETE campaign/links/{id}
+      if (route.startsWith('campaign/links/') && method === 'DELETE') {
+        const id = Number(route.slice('campaign/links/'.length));
+        if (!id) {
+          sendError(res, 400, 'Invalid link id');
+          return true;
+        }
+        db.deleteCampaignLink(id);
+        sendJson(res, 200, { success: true, deleted: id });
+        return true;
+      }
+
       // 6. GET groups
       if (route === 'groups' && method === 'GET') {
         const config = db.getConfig();

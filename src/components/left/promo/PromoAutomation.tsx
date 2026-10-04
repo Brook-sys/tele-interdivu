@@ -13,25 +13,38 @@ import type { PromoChatStatus, PromoSettings } from '../../../global/types/promo
 
 import { selectPromoSettings, selectPromoUserState } from '../../../global/selectors/promo';
 import buildClassName from '../../../util/buildClassName';
+import { copyTextToClipboard } from '../../../util/clipboard';
 import {
+  type AutomationCampaign,
+  type AutomationCampaignLink,
+  type AutomationCampaignTemplate,
   type AutomationGroupState,
   type AutomationLogItem,
   type AutomationStatusResponse,
+  deleteCampaignLink,
+  deleteCampaignTemplate,
+  fetchAutomationCampaign,
   fetchAutomationDebug,
   fetchAutomationGroups,
   fetchAutomationLogs,
   fetchAutomationStatus,
   forceNewAutomationRound,
   reconnectAutomationTelegram,
-  saveAutomationCampaign,
   saveAutomationConfig,
+  saveCampaignLink,
+  saveCampaignTemplate,
   skipAutomationPause,
   startAutomationTakeover,
   stopAutomationRelease,
-  testSpintaxPreviews,
 } from '../../../util/promo/automationApi';
 import { classifyPromoChat, getSlowmodeRemainingSeconds } from '../../../util/promo/classifyChat';
 import { formatCountdownSeconds } from '../../../util/promo/countdownFormat';
+import {
+  compileSpunMessage,
+  countMessageVariations,
+  pickTemplate,
+  validateSpintaxSyntax,
+} from '../../../util/promo/spintax';
 import { getServerTime } from '../../../util/serverTime';
 import { loadStoredSession } from '../../../util/sessions';
 import { callApi } from '../../../api/gramjs';
@@ -68,6 +81,9 @@ type TabType = 'campaign' | 'settings' | 'queue' | 'logs' | 'debug';
 
 const STATUS_REFRESH_INTERVAL_MS = 3000;
 
+// Below this number of unique messages the resend volume starts visibly repeating
+const MIN_HEALTHY_VARIATIONS = 50;
+
 const PromoAutomation = ({
   isActive,
   isEmbedded,
@@ -96,11 +112,19 @@ const PromoAutomation = ({
   // preventing periodic status polling from overwriting user edits.
   const isFormInitializedRef = useRef(false);
 
-  // Campaign form state
-  const [spintaxTemplate, setSpintaxTemplate] = useState('');
-  const [linksText, setLinksText] = useState('');
+  // Campaign state
+  const [campaign, setCampaign] = useState<AutomationCampaign | undefined>();
+  const [rotationEnabled, setRotationEnabled] = useState(false);
   const [linkPreview, setLinkPreview] = useState(false);
-  const [previews, setPreviews] = useState<string[]>([]);
+  const [editingTemplate, setEditingTemplate] = useState<{
+    id?: number;
+    title: string;
+    content: string;
+    weight: string;
+  } | undefined>();
+  const [previewSeed, setPreviewSeed] = useState(0);
+  const [newLinkUrl, setNewLinkUrl] = useState('');
+  const [copiedUrl, setCopiedUrl] = useState<string | undefined>();
 
   // Settings form state
   const [mode, setMode] = useState<'manual' | 'continuous'>('manual');
@@ -143,8 +167,7 @@ const PromoAutomation = ({
         isFormInitializedRef.current = true;
 
         if (res.campaign) {
-          setSpintaxTemplate(res.campaign.spintaxTemplate || '');
-          setLinksText((res.campaign.links || []).join('\n'));
+          setCampaign(res.campaign);
         }
 
         if (res.config) {
@@ -160,6 +183,7 @@ const PromoAutomation = ({
           setSleepEnd(res.config.sleepWindowEnd || '07:30');
           setDailyLimit(String(res.config.dailyLimit ?? 80));
           setLinkPreview(Boolean(res.config.linkPreviewEnabled));
+          setRotationEnabled(Boolean(res.config.templateRotationEnabled));
           setMicroPauseEnabled(res.config.microPauseEnabled !== undefined
             ? Boolean(res.config.microPauseEnabled) : true);
           setMicroPauseEveryMin(String(res.config.microPauseEveryMin ?? 6));
@@ -289,17 +313,64 @@ const PromoAutomation = ({
     }
   });
 
-  const handleSaveCampaign = useLastCallback(async () => {
-    setActionError(undefined);
-    setSaveSuccessMsg(undefined);
-    markSubmitting();
+  const showSavedFeedback = useLastCallback(() => {
+    setSaveSuccessMsg(lang('PromoAutomationSaved'));
+    setTimeout(() => setSaveSuccessMsg(undefined), 3000);
+  });
 
+  const refreshCampaign = useLastCallback(async () => {
+    setCampaign(await fetchAutomationCampaign());
+  });
+
+  const handleToggleRotation = useLastCallback(async (isEnabled: boolean) => {
+    setRotationEnabled(isEnabled);
     try {
-      const links = linksText.split('\n').map((l) => l.trim()).filter(Boolean);
-      await saveAutomationCampaign(spintaxTemplate, links);
-      await saveAutomationConfig({ linkPreviewEnabled: linkPreview });
-      setSaveSuccessMsg(lang('PromoAutomationSaved'));
-      setTimeout(() => setSaveSuccessMsg(undefined), 3000);
+      await saveAutomationConfig({ templateRotationEnabled: isEnabled });
+    } catch (err: any) {
+      setRotationEnabled(!isEnabled);
+      setActionError(err.message);
+    }
+  });
+
+  const handleToggleLinkPreview = useLastCallback(async (isEnabled: boolean) => {
+    setLinkPreview(isEnabled);
+    try {
+      await saveAutomationConfig({ linkPreviewEnabled: isEnabled });
+    } catch (err: any) {
+      setLinkPreview(!isEnabled);
+      setActionError(err.message);
+    }
+  });
+
+  const handleStartEditTemplate = useLastCallback((template?: AutomationCampaignTemplate) => {
+    setEditingTemplate(template
+      ? { id: template.id, title: template.title, content: template.content, weight: String(template.weight) }
+      : { title: '', content: '', weight: '1' });
+  });
+
+  const handleCancelEditTemplate = useLastCallback(() => setEditingTemplate(undefined));
+
+  const handleSaveTemplate = useLastCallback(async () => {
+    if (!editingTemplate) return;
+
+    const validation = validateSpintaxSyntax(editingTemplate.content);
+    if (!validation.isValid) {
+      setActionError(validation.error);
+      return;
+    }
+
+    setActionError(undefined);
+    markSubmitting();
+    try {
+      await saveCampaignTemplate({
+        id: editingTemplate.id,
+        title: editingTemplate.title.trim(),
+        content: editingTemplate.content,
+        weight: Math.max(1, Number(editingTemplate.weight) || 1),
+      });
+      setEditingTemplate(undefined);
+      await refreshCampaign();
+      showSavedFeedback();
     } catch (err: any) {
       setActionError(err.message);
     } finally {
@@ -307,16 +378,102 @@ const PromoAutomation = ({
     }
   });
 
-  const handleTestPreviews = useLastCallback(async () => {
+  const handleToggleTemplateEnabled = useLastCallback(
+    async (template: AutomationCampaignTemplate, isEnabled: boolean) => {
+      // Optimistic local toggle, reverted on failure
+      const patchCampaign = (nextEnabled: boolean) => {
+        setCampaign((current) => current && {
+          ...current,
+          templates: current.templates.map(
+            (t) => (t.id === template.id ? { ...t, isEnabled: nextEnabled } : t),
+          ),
+        });
+      };
+
+      patchCampaign(isEnabled);
+      try {
+        await saveCampaignTemplate({
+          id: template.id,
+          title: template.title,
+          content: template.content,
+          weight: template.weight,
+          isEnabled,
+        });
+      } catch (err: any) {
+        patchCampaign(!isEnabled);
+        setActionError(err.message);
+      }
+    },
+  );
+
+  const handleDeleteTemplate = useLastCallback(async (template: AutomationCampaignTemplate) => {
+    if (!window.confirm(lang('PromoAutomationDeleteTemplateConfirm'))) return;
     setActionError(undefined);
     try {
-      const links = linksText.split('\n').map((l) => l.trim()).filter(Boolean);
-      const res = await testSpintaxPreviews(spintaxTemplate, links);
-      setPreviews(res.previews.map((p) => p.messageText));
+      await deleteCampaignTemplate(template.id);
+      await refreshCampaign();
     } catch (err: any) {
       setActionError(err.message);
     }
   });
+
+  const handleToggleLinkEnabled = useLastCallback(
+    async (link: AutomationCampaignLink, isEnabled: boolean) => {
+      // Optimistic local toggle, reverted on failure
+      const patchCampaign = (nextEnabled: boolean) => {
+        setCampaign((current) => current && {
+          ...current,
+          allLinks: current.allLinks.map(
+            (l) => (l.id === link.id ? { ...l, isEnabled: nextEnabled } : l),
+          ),
+        });
+      };
+
+      patchCampaign(isEnabled);
+      try {
+        await saveCampaignLink({ id: link.id, url: link.url, isEnabled });
+      } catch (err: any) {
+        patchCampaign(!isEnabled);
+        setActionError(err.message);
+      }
+    },
+  );
+
+  const handleAddLink = useLastCallback(async () => {
+    const url = newLinkUrl.trim();
+    if (!url) return;
+
+    setActionError(undefined);
+    markSubmitting();
+    try {
+      await saveCampaignLink({ url });
+      setNewLinkUrl('');
+      await refreshCampaign();
+      showSavedFeedback();
+    } catch (err: any) {
+      setActionError(err.message);
+    } finally {
+      unmarkSubmitting();
+    }
+  });
+
+  const handleDeleteLink = useLastCallback(async (link: AutomationCampaignLink) => {
+    setActionError(undefined);
+    try {
+      await deleteCampaignLink(link.id);
+      await refreshCampaign();
+    } catch (err: any) {
+      setActionError(err.message);
+    }
+  });
+
+  const handleCopyLink = useLastCallback((url: string) => {
+    copyTextToClipboard(url);
+    setCopiedUrl(url);
+    setTimeout(() => setCopiedUrl(undefined), 1500);
+  });
+
+  const handleRerollPreview = useLastCallback(() => setPreviewSeed(Date.now()));
 
   const handleSkipPause = useLastCallback(async () => {
     setActionError(undefined);
@@ -556,56 +713,269 @@ const PromoAutomation = ({
     );
   };
 
+  const enabledLinks = useMemo(
+    () => (campaign?.allLinks ?? []).filter((l) => l.isEnabled).map((l) => l.url),
+    [campaign],
+  );
+
+  const savedPreview = useMemo(() => {
+    // previewSeed forces a fresh random pick on re-roll
+    const seed = previewSeed;
+    const template = pickTemplate(campaign?.templates ?? [], rotationEnabled);
+    return { seed, template };
+  }, [campaign, rotationEnabled, previewSeed]);
+
+  // While editing, the preview follows the draft content live
+  const previewContent = editingTemplate ? editingTemplate.content : savedPreview.template?.content;
+
+  const previewMessage = useMemo(() => {
+    if (previewContent === undefined) return undefined;
+    return compileSpunMessage(previewContent, enabledLinks).messageText;
+  }, [previewContent, enabledLinks]);
+
+  const previewVariations = previewContent !== undefined
+    ? countMessageVariations(previewContent, enabledLinks) : 0;
+  const isLowVariety = previewVariations > 0 && previewVariations < MIN_HEALTHY_VARIATIONS;
+
   const renderCampaignTab = () => {
+    const templates = campaign?.templates ?? [];
+    const links = campaign?.allLinks ?? [];
+    const editingValidation = editingTemplate
+      ? validateSpintaxSyntax(editingTemplate.content) : undefined;
+
     return (
       <div className={styles.tabContent}>
-        <div className={styles.fieldGroup}>
-          <label className={styles.fieldLabel}>{lang('PromoAutomationSpintaxLabel')}</label>
-          <textarea
-            className={styles.textarea}
-            rows={5}
-            value={spintaxTemplate}
-            placeholder="{Olá|Oi|E aí} pessoal, confiram {esse link|essa novidade}: {LINK}"
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setSpintaxTemplate(e.target.value)}
-          />
-        </div>
-
-        <div className={styles.fieldGroup}>
-          <label className={styles.fieldLabel}>{lang('PromoAutomationLinksLabel')}</label>
-          <textarea
-            className={styles.textarea}
-            rows={3}
-            value={linksText}
-            placeholder="https://t.me/seucanal&#10;https://t.me/seugrupo"
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setLinksText(e.target.value)}
-          />
+        <div className={styles.sectionGroup}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.fieldLabel}>{lang('PromoAutomationPreviewTitle')}</span>
+            {previewVariations > 0 && (
+              <span
+                className={buildClassName(
+                  styles.variationsBadge,
+                  isLowVariety && styles.variationsLow,
+                )}
+                title={lang('PromoAutomationVariationsHint')}
+              >
+                {lang(
+                  'PromoAutomationVariations',
+                  { count: previewVariations },
+                  { pluralValue: previewVariations },
+                )}
+              </span>
+            )}
+          </div>
+          {previewMessage !== undefined ? (
+            <>
+              <div className={styles.previewBubble}>{previewMessage}</div>
+              <div className={styles.btnRow}>
+                <Button size="smaller" color="translucent" onClick={handleRerollPreview}>
+                  {lang('PromoAutomationReroll')}
+                </Button>
+              </div>
+              {isLowVariety && (
+                <div className={styles.varietyWarning}>{lang('PromoAutomationVarietyLow')}</div>
+              )}
+            </>
+          ) : (
+            <div className={styles.emptyText}>{lang('PromoAutomationNoTemplates')}</div>
+          )}
         </div>
 
         <div className={styles.checkboxRow}>
           <Checkbox
             checked={linkPreview}
-            onCheck={setLinkPreview}
+            onCheck={handleToggleLinkPreview}
             label={lang('PromoAutomationLinkPreview')}
           />
         </div>
-
-        <div className={styles.btnRow}>
-          <Button size="smaller" color="translucent" onClick={handleTestPreviews}>
-            {lang('PromoAutomationTestSpintax')}
-          </Button>
-          <Button size="smaller" color="primary" disabled={isSubmitting} onClick={handleSaveCampaign}>
-            {lang('PromoAutomationSave')}
-          </Button>
+        <div className={styles.checkboxRow}>
+          <Checkbox
+            checked={rotationEnabled}
+            onCheck={handleToggleRotation}
+            label={lang('PromoAutomationRotationLabel')}
+          />
         </div>
 
-        {previews.length > 0 && (
-          <div className={styles.previewsContainer}>
-            <div className={styles.previewsHeader}>Exemplos Gerados:</div>
-            {previews.map((prev, idx) => (
-              <div key={idx} className={styles.previewBox}>{prev}</div>
-            ))}
+        <div className={styles.sectionGroup}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.fieldLabel}>{lang('PromoAutomationTemplatesLabel')}</span>
+            {!editingTemplate && (
+              <Button size="smaller" color="translucent" onClick={() => handleStartEditTemplate()}>
+                {lang('PromoAutomationNewTemplate')}
+              </Button>
+            )}
           </div>
-        )}
+
+          {editingTemplate && (
+            <div className={styles.templateEdit}>
+              <InputText
+                label={lang('PromoAutomationTemplateTitle')}
+                value={editingTemplate.title}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setEditingTemplate({
+                  ...editingTemplate,
+                  title: e.target.value,
+                })}
+              />
+              <textarea
+                className={styles.textarea}
+                rows={5}
+                value={editingTemplate.content}
+                placeholder="{Olá|Oi|E aí} pessoal, confiram {esse link|essa novidade}: {LINK}"
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setEditingTemplate({
+                  ...editingTemplate,
+                  content: e.target.value,
+                })}
+              />
+              <div className={styles.twoCols}>
+                <InputText
+                  label={lang('PromoAutomationTemplateWeight')}
+                  value={editingTemplate.weight}
+                  inputMode="numeric"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setEditingTemplate({
+                    ...editingTemplate,
+                    weight: e.target.value,
+                  })}
+                />
+                <div className={styles.btnRow}>
+                  <Button size="smaller" onClick={handleCancelEditTemplate}>
+                    {lang('PromoAutomationCancel')}
+                  </Button>
+                  <Button
+                    size="smaller"
+                    color="primary"
+                    disabled={isSubmitting || !editingValidation?.isValid}
+                    onClick={handleSaveTemplate}
+                  >
+                    {lang('PromoAutomationSave')}
+                  </Button>
+                </div>
+              </div>
+              {editingTemplate.content && !editingValidation?.isValid && (
+                <div className={styles.inlineError}>{editingValidation?.error}</div>
+              )}
+            </div>
+          )}
+
+          {templates.filter((t) => t.id !== editingTemplate?.id).map((template) => {
+            const templateVariations = countMessageVariations(template.content, enabledLinks);
+            return (
+              <div
+                key={template.id}
+                className={buildClassName(
+                  styles.templateCard,
+                  !template.isEnabled && styles.templateCardOff,
+                )}
+              >
+                <div className={styles.templateHead}>
+                  <Checkbox
+                    checked={template.isEnabled}
+                    onCheck={(isEnabled) => handleToggleTemplateEnabled(template, isEnabled)}
+                  />
+                  <div className={styles.templateInfo}>
+                    <div className={styles.templateTitle}>
+                      {template.title || lang('PromoAutomationUntitledTemplate')}
+                    </div>
+                    <div className={styles.templateSnippet}>{template.content}</div>
+                  </div>
+                  <span
+                    className={styles.templateVariations}
+                    title={lang('PromoAutomationVariationsHint')}
+                  >
+                    {lang(
+                      'PromoAutomationVariations',
+                      { count: templateVariations },
+                      { pluralValue: templateVariations },
+                    )}
+                  </span>
+                  <span
+                    className={styles.templateWeight}
+                    title={lang('PromoAutomationTemplateWeight')}
+                  >
+                    ×
+                    {template.weight}
+                  </span>
+                  <div className={styles.linkActions}>
+                    <Button
+                      round
+                      size="smaller"
+                      color="translucent"
+                      ariaLabel={lang('PromoAutomationEdit')}
+                      iconName="edit"
+                      onClick={() => handleStartEditTemplate(template)}
+                    />
+                    <Button
+                      round
+                      size="smaller"
+                      color="translucent"
+                      ariaLabel={lang('PromoAutomationDelete')}
+                      iconName="delete"
+                      onClick={() => handleDeleteTemplate(template)}
+                    />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className={styles.sectionGroup}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.fieldLabel}>{lang('PromoAutomationLinksLabel')}</span>
+          </div>
+          {!links.length && (
+            <div className={styles.emptyText}>{lang('PromoAutomationNoLinks')}</div>
+          )}
+          {links.map((link) => (
+            <div
+              key={link.id}
+              className={buildClassName(
+                styles.linkItem,
+                !link.isEnabled && styles.linkItemOff,
+              )}
+            >
+              <Checkbox
+                checked={link.isEnabled}
+                onCheck={(isEnabled) => handleToggleLinkEnabled(link, isEnabled)}
+              />
+              <span className={styles.linkUrl}>{link.url}</span>
+              {copiedUrl === link.url && (
+                <span className={styles.linkCopiedHint}>{lang('PromoAutomationLinkCopied')}</span>
+              )}
+              <div className={styles.linkActions}>
+                <Button
+                  round
+                  size="smaller"
+                  color="translucent"
+                  ariaLabel={lang('PromoAutomationCopyLink')}
+                  iconName="copy"
+                  onClick={() => handleCopyLink(link.url)}
+                />
+                <Button
+                  round
+                  size="smaller"
+                  color="translucent"
+                  ariaLabel={lang('PromoAutomationDelete')}
+                  iconName="delete"
+                  onClick={() => handleDeleteLink(link)}
+                />
+              </div>
+            </div>
+          ))}
+          <div className={styles.addLinkRow}>
+            <InputText
+              placeholder={lang('PromoAutomationLinkUrlPlaceholder')}
+              value={newLinkUrl}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setNewLinkUrl(e.target.value)}
+            />
+            <Button
+              size="smaller"
+              disabled={isSubmitting || !newLinkUrl.trim()}
+              onClick={handleAddLink}
+            >
+              {lang('PromoAutomationAddLink')}
+            </Button>
+          </div>
+        </div>
       </div>
     );
   };

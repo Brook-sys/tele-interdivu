@@ -201,6 +201,63 @@ describe('Automation REST API routes', () => {
       delete process.env.AUTOMATION_API_TOKEN;
     }
   });
+  it('manages campaign templates via CRUD', async () => {
+    const postRes = await api('campaign/templates', {
+      method: 'POST',
+      body: JSON.stringify({ title: 'A', content: 'Promo {hoje|agora}: {LINK}', weight: 2 }),
+    });
+    expect(postRes.status).toBe(200);
+    expect(postRes.data.weight).toBe(2);
+    expect(postRes.data.isEnabled).toBe(true);
+
+    const invalid = await api('campaign/templates', {
+      method: 'POST',
+      body: JSON.stringify({ title: 'Bad', content: '{Oi|ops' }),
+    });
+    expect(invalid.status).toBe(400);
+    expect(invalid.data.error).toContain('Spintax syntax error');
+
+    const toggle = await api('campaign/templates', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: postRes.data.id, title: 'A', content: 'Promo {hoje|agora}: {LINK}', weight: 2, isEnabled: false,
+      }),
+    });
+    expect(toggle.status).toBe(200);
+    expect(toggle.data.isEnabled).toBe(false);
+
+    const del = await api(`campaign/templates/${postRes.data.id}`, { method: 'DELETE' });
+    expect(del.status).toBe(200);
+
+    const campaign = await api('campaign');
+    expect(campaign.data.templates.find((t: any) => t.id === postRes.data.id)).toBeUndefined();
+  });
+
+  it('manages campaign links via CRUD', async () => {
+    const postRes = await api('campaign/links', {
+      method: 'POST',
+      body: JSON.stringify({ url: 'https://t.me/promo-crud' }),
+    });
+    expect(postRes.status).toBe(200);
+    expect(postRes.data.url).toBe('https://t.me/promo-crud');
+
+    const empty = await api('campaign/links', { method: 'POST', body: JSON.stringify({ url: '   ' }) });
+    expect(empty.status).toBe(400);
+
+    const toggle = await api('campaign/links', {
+      method: 'POST',
+      body: JSON.stringify({ id: postRes.data.id, url: 'https://t.me/promo-crud', isEnabled: false }),
+    });
+    expect(toggle.status).toBe(200);
+
+    const campaign = await api('campaign');
+    expect(campaign.data.links).not.toContain('https://t.me/promo-crud');
+    expect(campaign.data.allLinks.map((l: any) => l.url)).toContain('https://t.me/promo-crud');
+
+    const del = await api(`campaign/links/${postRes.data.id}`, { method: 'DELETE' });
+    expect(del.status).toBe(200);
+  });
+
 });
 
 describe('Extractor REST API', () => {
@@ -377,4 +434,5 @@ describe('Extractor resolve & CSV export', () => {
     expect(res.text).toContain('"Destino ""X"""');
     expect(res.text).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
+
 });

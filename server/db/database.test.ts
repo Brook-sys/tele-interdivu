@@ -42,6 +42,62 @@ describe('AutomationDatabase (in-memory SQLite)', () => {
     db.close();
   });
 
+  it('manages multiple templates and links with weights and toggles', () => {
+    const db = new AutomationDatabase(':memory:');
+    const campaignId = db.getCampaign().id;
+
+    const templateA = db.saveCampaignTemplate({
+      campaignId, title: 'A', content: 'Template A: {LINK}', weight: 3,
+    });
+    const templateB = db.saveCampaignTemplate({
+      campaignId, title: 'B', content: 'Template B: {LINK}',
+    });
+
+    const link1 = db.saveCampaignLink({ campaignId, url: 'https://t.me/c1' });
+    const link2 = db.saveCampaignLink({ campaignId, url: 'https://t.me/c2' });
+    db.saveCampaignLink({ campaignId, id: link2.id, url: 'https://t.me/c2', isEnabled: false });
+
+    const campaign = db.getCampaign();
+    expect(campaign.templates.length).toBe(2);
+    expect(campaign.templates[0].id).toBe(templateA.id);
+    expect(campaign.templates[0].weight).toBe(3);
+    expect(campaign.templates[1].id).toBe(templateB.id);
+    expect(campaign.allLinks.length).toBe(2);
+    expect(campaign.links).toEqual(['https://t.me/c1']);
+    expect(campaign.templates.find((t) => t.id === templateB.id)?.isEnabled).toBe(true);
+
+    // Disabling the first template makes the second one the active content
+    db.saveCampaignTemplate({
+      campaignId, id: templateA.id, title: 'A', content: 'Template A: {LINK}', isEnabled: false,
+    });
+    expect(db.getCampaign().spintaxTemplate).toBe('Template B: {LINK}');
+
+    db.deleteCampaignTemplate(templateB.id);
+    db.deleteCampaignLink(link1.id);
+    const afterDelete = db.getCampaign();
+    expect(afterDelete.templates.length).toBe(1);
+    expect(afterDelete.allLinks.length).toBe(1);
+    db.close();
+  });
+
+  it('migrates the legacy single-row campaign into templates and links', () => {
+    const db = new AutomationDatabase(':memory:');
+    // Seed the legacy table directly (pre-migration format)
+    db.db.prepare(
+      'INSERT INTO campaign (id, spintax_template, links_json, updated_at) VALUES (1, ?, ?, ?)',
+    ).run('Oi {bem|tranquilo}?', JSON.stringify(['https://t.me/x', 'https://t.me/y']), 123);
+    db.db.prepare('DELETE FROM campaigns').run();
+
+    db.migrateLegacyCampaign();
+
+    const campaign = db.getCampaign();
+    expect(campaign.name).toBe('Padrão');
+    expect(campaign.templates.length).toBe(1);
+    expect(campaign.templates[0].content).toBe('Oi {bem|tranquilo}?');
+    expect(campaign.links).toEqual(['https://t.me/x', 'https://t.me/y']);
+    db.close();
+  });
+
   it('saves and clears session JSON', () => {
     const db = new AutomationDatabase(':memory:');
     expect(db.getSession()).toBeUndefined();

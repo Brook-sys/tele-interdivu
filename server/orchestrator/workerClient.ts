@@ -12,7 +12,12 @@ interface ClaimDecision {
 interface HeartbeatResponse {
   serverNow: number;
   desiredConfig?: Partial<AutomationDbConfig>;
-  desiredCampaign?: { spintaxTemplate: string; links: string[] };
+  desiredCampaign?: {
+    spintaxTemplate?: string;
+    links?: string[];
+    templates?: { title: string; content: string; weight: number; isEnabled: boolean }[];
+    allLinks?: { url: string; isEnabled: boolean }[];
+  };
 }
 
 const REQUEST_TIMEOUT_MS = 5000;
@@ -63,6 +68,43 @@ export class OrchestratorWorkerClient {
     return this.isDegraded;
   }
 
+  // Content-only projections so heartbeat syncs don't rewrite rows that
+  // did not actually change (rewrite would churn local template ids)
+  private projectTemplates(templates: { title: string; content: string; weight: number; isEnabled: boolean }[]) {
+    return templates
+      .map((t) => `${t.title}\u0000${t.content}\u0000${t.weight}\u0000${t.isEnabled}`)
+      .join('\u0001');
+  }
+
+  private projectLinks(links: { url: string; isEnabled: boolean }[]) {
+    return links.map((l) => `${l.url}\u0000${l.isEnabled}`).join('\u0001');
+  }
+
+  private applyDesiredCampaign(desired: NonNullable<HeartbeatResponse['desiredCampaign']>) {
+    const current = this.db.getCampaign();
+
+    if (desired.templates?.length) {
+      const desiredLinks = desired.allLinks?.length
+        ? desired.allLinks : (desired.links || []).map((url) => ({ url }));
+      const isChanged = this.projectTemplates(current.templates) !== this.projectTemplates(desired.templates)
+        || this.projectLinks(current.allLinks) !== this.projectLinks(desiredLinks);
+      if (isChanged) {
+        this.db.replaceCampaignContent(current.id, desired.templates, desiredLinks);
+      }
+      return;
+    }
+
+    // Legacy single-template payload from an older master image
+    if (desired.spintaxTemplate) {
+      const desiredLinks = (desired.links || []).map((url) => ({ url }));
+      const isChanged = current.spintaxTemplate !== desired.spintaxTemplate
+        || this.projectLinks(current.allLinks) !== this.projectLinks(desiredLinks);
+      if (isChanged) {
+        this.db.saveCampaign(desired.spintaxTemplate, desired.links || []);
+      }
+    }
+  }
+
   startHeartbeatLoop(getStatus: () => Record<string, unknown>) {
     if (this.heartbeatTimer) return;
 
@@ -80,8 +122,8 @@ export class OrchestratorWorkerClient {
         if (response.desiredConfig) {
           this.db.updateConfig(response.desiredConfig);
         }
-        if (response.desiredCampaign?.spintaxTemplate) {
-          this.db.saveCampaign(response.desiredCampaign.spintaxTemplate, response.desiredCampaign.links || []);
+        if (response.desiredCampaign) {
+          this.applyDesiredCampaign(response.desiredCampaign);
         }
       } catch {
         // Degraded: keep working locally, keep retrying on the next ticks

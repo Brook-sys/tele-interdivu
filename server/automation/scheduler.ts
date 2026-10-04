@@ -2,7 +2,7 @@ import type { AutomationDatabase, AutomationDbConfig, GroupStateRecord } from '.
 import type { OrchestratorSendResult, OrchestratorWorkerClient } from '../orchestrator/workerClient';
 import type { ChatProbeResult } from './telegramRunner';
 
-import { compileSpunMessage } from './spintax';
+import { compileSpunMessage, pickTemplate } from './spintax';
 
 export type SchedulerStatus =
   | 'STOPPED'
@@ -754,7 +754,8 @@ export class AutomationScheduler {
 
         // 6. Compile and send message
         const campaign = this.db.getCampaign();
-        if (!campaign.spintaxTemplate) {
+        const template = pickTemplate(campaign.templates, config.templateRotationEnabled);
+        if (!template) {
           this.state.lastRunError = 'No campaign template configured';
           this.state.status = 'STOPPED';
           break;
@@ -784,7 +785,7 @@ export class AutomationScheduler {
         await this.sleep(delayMs, signal);
 
         // Execute send
-        const { messageText, linkUsed } = compileSpunMessage(campaign.spintaxTemplate, campaign.links);
+        const { messageText, linkUsed } = compileSpunMessage(template.content, campaign.links);
         const sendResult = await this.sendCallback(eligibleGroup.chatId, messageText, linkUsed);
 
         const timestamp = Math.floor(Date.now() / 1000);
@@ -831,6 +832,7 @@ export class AutomationScheduler {
             chatId: eligibleGroup.chatId,
             chatTitle: eligibleGroup.title,
             messageSnippet: messageText.slice(0, 100),
+            templateId: template.id,
             linkUsed,
             status: 'SUCCESS',
           });
@@ -842,6 +844,7 @@ export class AutomationScheduler {
             chatId: eligibleGroup.chatId,
             chatTitle: eligibleGroup.title,
             messageSnippet: messageText.slice(0, 100),
+            templateId: template.id,
             linkUsed,
             status: 'SKIPPED',
             details: sendResult.error || 'Grupo cobra estrelas (excluído da automação)',
@@ -853,6 +856,7 @@ export class AutomationScheduler {
             chatId: eligibleGroup.chatId,
             chatTitle: eligibleGroup.title,
             messageSnippet: messageText.slice(0, 100),
+            templateId: template.id,
             linkUsed,
             status: 'SKIPPED',
             details: sendResult.error || `Em slowmode: aguardando ${sendResult.slowmodeSeconds}s`,
@@ -864,6 +868,7 @@ export class AutomationScheduler {
             chatId: eligibleGroup.chatId,
             chatTitle: eligibleGroup.title,
             messageSnippet: messageText.slice(0, 100),
+            templateId: template.id,
             linkUsed,
             status: 'FLOOD_WAIT',
             details: `Flood wait: ${sendResult.floodWaitSeconds}s`,
@@ -899,6 +904,7 @@ export class AutomationScheduler {
             chatId: eligibleGroup.chatId,
             chatTitle: eligibleGroup.title,
             messageSnippet: messageText.slice(0, 100),
+            templateId: template.id,
             linkUsed,
             status: 'ERROR',
             details: sendResult.error,
