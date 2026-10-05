@@ -414,16 +414,28 @@ export function createApiHandler(
 
       // 5d. POST campaign/links — upsert a link of the active campaign
       if (route === 'campaign/links' && method === 'POST') {
-        const body = await readJsonBody<{ id?: number; url: string; isEnabled?: boolean }>(req);
+        const body = await readJsonBody<{
+          id?: number;
+          url: string;
+          isEnabled?: boolean;
+          destinationId?: number;
+        }>(req);
         if (!body.url || !body.url.trim()) {
           sendError(res, 400, 'url is required');
           return true;
         }
+        const campaign = db.getCampaign();
+        if (body.destinationId !== undefined
+          && !campaign.destinations.some((destination) => destination.id === body.destinationId)) {
+          sendError(res, 400, 'destinationId does not belong to the active campaign');
+          return true;
+        }
         const saved = db.saveCampaignLink({
           id: body.id,
-          campaignId: db.getCampaign().id,
+          campaignId: campaign.id,
           url: body.url.trim(),
           isEnabled: body.isEnabled,
+          destinationId: body.destinationId,
         });
         sendJson(res, 200, saved);
         return true;
@@ -438,6 +450,63 @@ export function createApiHandler(
         }
         db.deleteCampaignLink(id);
         sendJson(res, 200, { success: true, deleted: id });
+        return true;
+      }
+
+      // 5e2. POST campaign/destinations — upsert a destination of the active campaign
+      if (route === 'campaign/destinations' && method === 'POST') {
+        const body = await readJsonBody<{
+          id?: number;
+          name?: string;
+          weight?: number;
+          isEnabled?: boolean;
+        }>(req);
+        if (!body.id && !body.name?.trim()) {
+          sendError(res, 400, 'name is required when creating a destination');
+          return true;
+        }
+        const campaign = db.getCampaign();
+        if (body.id && !campaign.destinations.some((destination) => destination.id === body.id)) {
+          sendError(res, 404, 'Destination not found in the active campaign');
+          return true;
+        }
+        const saved = db.saveDestination({
+          id: body.id,
+          campaignId: campaign.id,
+          name: body.name?.trim(),
+          weight: body.weight,
+          isEnabled: body.isEnabled,
+        });
+        sendJson(res, 200, saved);
+        return true;
+      }
+
+      // 5e3. DELETE campaign/destinations/{id} — links become loose
+      if (route.startsWith('campaign/destinations/') && method === 'DELETE') {
+        const id = Number(route.slice('campaign/destinations/'.length));
+        if (!id) {
+          sendError(res, 400, 'Invalid destination id');
+          return true;
+        }
+        db.deleteCampaignDestination(id);
+        sendJson(res, 200, { success: true, deleted: id });
+        return true;
+      }
+
+      // 5e4. POST campaign/destinations/focus — promote only this destination
+      // (enables it and disables all others of the campaign, atomically)
+      if (route === 'campaign/destinations/focus' && method === 'POST') {
+        const body = await readJsonBody<{ id: number }>(req);
+        if (!body.id) {
+          sendError(res, 400, 'id is required');
+          return true;
+        }
+        const applied = db.focusDestination(Number(body.id));
+        if (!applied) {
+          sendError(res, 404, 'Destination not found');
+          return true;
+        }
+        sendJson(res, 200, { success: true, campaign: db.getCampaign() });
         return true;
       }
 

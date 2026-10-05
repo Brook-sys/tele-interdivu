@@ -89,6 +89,84 @@ export function countMessageVariations(text: string, links: string[]): number {
   return variations;
 }
 
+export interface DestinationLike {
+  id: number;
+  weight: number;
+  isEnabled: boolean;
+}
+
+export interface LinkLike {
+  url: string;
+  isEnabled: boolean;
+  destinationId?: number;
+}
+
+// Mirrors the server send-time pick: weighted-random among enabled
+// destinations that have enabled links; loose links only when no
+// destination qualifies. Powers the live preview with the exact pool
+// a real send would use
+export function pickPromotionPool<T extends DestinationLike, L extends LinkLike>(
+  destinations: T[],
+  links: L[],
+): { urls: string[]; destinationId?: number } {
+  const urlsByDestinationId = new Map<number, string[]>();
+  const looseUrls: string[] = [];
+
+  for (const link of links) {
+    if (!link.isEnabled) continue;
+    if (link.destinationId === undefined) {
+      looseUrls.push(link.url);
+      continue;
+    }
+    const bucket = urlsByDestinationId.get(link.destinationId);
+    if (bucket) bucket.push(link.url);
+    else urlsByDestinationId.set(link.destinationId, [link.url]);
+  }
+
+  const candidates = destinations.filter(
+    (destination) => destination.isEnabled
+      && (urlsByDestinationId.get(destination.id)?.length ?? 0) > 0,
+  );
+  if (!candidates.length) return { urls: looseUrls };
+
+  if (candidates.length === 1) {
+    return { urls: urlsByDestinationId.get(candidates[0].id)!, destinationId: candidates[0].id };
+  }
+
+  const weights = candidates.map((destination) => Math.max(1, Number(destination.weight) || 1));
+  const total = weights.reduce((sum, w) => sum + w, 0);
+
+  let roll = Math.random() * total;
+  let picked = candidates[candidates.length - 1];
+  for (let i = 0; i < candidates.length; i++) {
+    roll -= weights[i];
+    if (roll < 0) {
+      picked = candidates[i];
+      break;
+    }
+  }
+
+  return { urls: urlsByDestinationId.get(picked.id)!, destinationId: picked.id };
+}
+
+// Links reachable by the current rotation: enabled links of enabled
+// destinations, or loose links when no destination is active — used for
+// the variety health counter so it reflects what can actually be sent
+export function getActiveLinks<T extends DestinationLike, L extends LinkLike>(
+  destinations: T[],
+  links: L[],
+): string[] {
+  const activeIds = new Set(destinations.filter((destination) => destination.isEnabled).map((d) => d.id));
+  const destinationUrls = links
+    .filter((link) => link.isEnabled
+      && link.destinationId !== undefined
+      && activeIds.has(link.destinationId))
+    .map((link) => link.url);
+  if (destinationUrls.length) return destinationUrls;
+
+  return links.filter((link) => link.isEnabled && link.destinationId === undefined).map((link) => link.url);
+}
+
 function countVariations(text: string): number {
   let total = 1;
   let index = 0;

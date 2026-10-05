@@ -75,6 +75,16 @@ export interface AutomationCampaignLink {
   isEnabled: boolean;
   position: number;
   updatedAt: number;
+  destinationId?: number;
+}
+
+export interface CampaignDestination {
+  id: number;
+  name: string;
+  weight: number;
+  isEnabled: boolean;
+  position: number;
+  updatedAt: number;
 }
 
 export interface AutomationCampaign {
@@ -82,6 +92,7 @@ export interface AutomationCampaign {
   name: string;
   spintaxTemplate: string;
   templates: AutomationCampaignTemplate[];
+  destinations: CampaignDestination[];
   links: string[];
   allLinks: AutomationCampaignLink[];
   updatedAt: number;
@@ -309,7 +320,7 @@ export function deleteCampaignTemplate(id: number): Promise<{ success: boolean }
 }
 
 export function saveCampaignLink(
-  link: { id?: number; url: string; isEnabled?: boolean },
+  link: { id?: number; url: string; isEnabled?: boolean; destinationId?: number },
 ): Promise<AutomationCampaignLink> {
   return request<AutomationCampaignLink>('campaign/links', {
     method: 'POST',
@@ -320,6 +331,34 @@ export function saveCampaignLink(
 export function deleteCampaignLink(id: number): Promise<{ success: boolean }> {
   return request<{ success: boolean }>(`campaign/links/${id}`, {
     method: 'DELETE',
+  });
+}
+
+export function saveCampaignDestination(destination: {
+  id?: number;
+  name: string;
+  weight?: number;
+  isEnabled?: boolean;
+}): Promise<CampaignDestination> {
+  return request<CampaignDestination>('campaign/destinations', {
+    method: 'POST',
+    body: JSON.stringify(destination),
+  });
+}
+
+export function deleteCampaignDestination(id: number): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`campaign/destinations/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+// Enables exactly this destination and disables all others ("promote only X now")
+export function focusCampaignDestination(
+  id: number,
+): Promise<{ success: boolean; campaign: AutomationCampaign }> {
+  return request<{ success: boolean; campaign: AutomationCampaign }>('campaign/destinations/focus', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
   });
 }
 

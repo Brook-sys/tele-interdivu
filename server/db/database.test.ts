@@ -291,4 +291,164 @@ describe('AutomationDatabase (in-memory SQLite)', () => {
     expect(recent[0].status).toBe('SUCCESS'); // newest first
     db.close();
   });
+
+  it('manages destinations with weights, toggles and link assignment', () => {
+    const db = new AutomationDatabase(':memory:');
+    const campaignId = db.getCampaign().id;
+
+    const destination = db.saveDestination({ campaignId, name: 'Grupo X' });
+    expect(destination.name).toBe('Grupo X');
+    expect(destination.weight).toBe(1);
+    expect(destination.isEnabled).toBe(true);
+
+    const updated = db.saveDestination({ campaignId, id: destination.id, weight: 5 });
+    // Name is preserved when the patch omits it
+    expect(updated.name).toBe('Grupo X');
+    expect(updated.weight).toBe(5);
+
+    const assigned = db.saveCampaignLink({
+      campaignId, url: 'https://t.me/x1', destinationId: destination.id,
+    });
+    expect(assigned.destinationId).toBe(destination.id);
+
+    // Plain link toggles preserve the assignment
+    db.saveCampaignLink({
+      campaignId, id: assigned.id, url: 'https://t.me/x1', isEnabled: false,
+    });
+    expect(db.getCampaign().allLinks[0].destinationId).toBe(destination.id);
+
+    const campaign = db.getCampaign();
+    expect(campaign.destinations).toHaveLength(1);
+
+    db.deleteCampaignDestination(destination.id);
+    const afterDelete = db.getCampaign();
+    expect(afterDelete.destinations).toHaveLength(0);
+    // Deleting the destination keeps its links as loose
+    expect(afterDelete.allLinks[0].destinationId).toBeUndefined();
+    db.close();
+  });
+
+  it('focuses a destination, enabling only it', () => {
+    const db = new AutomationDatabase(':memory:');
+    const campaignId = db.getCampaign().id;
+    const a = db.saveDestination({ campaignId, name: 'A' });
+    const b = db.saveDestination({ campaignId, name: 'B' });
+    const c = db.saveDestination({ campaignId, name: 'C', isEnabled: false });
+
+    expect(db.focusDestination(b.id)).toBe(true);
+    const focused = db.getCampaign().destinations;
+    expect(focused.find((d) => d.id === a.id)?.isEnabled).toBe(false);
+    expect(focused.find((d) => d.id === b.id)?.isEnabled).toBe(true);
+    expect(focused.find((d) => d.id === c.id)?.isEnabled).toBe(false);
+
+    expect(db.focusDestination(999)).toBe(false);
+    db.close();
+  });
+
+  it('migrates unassigned links into destinations grouped by resolved title', () => {
+    const db = new AutomationDatabase(':memory:');
+    // Campaigns created after construction keep the pending-migration flag,
+    // matching pre-feature campaigns (the ALTER seeds them with 0)
+    const campaignId = db.createCampaign('Migração');
+    db.activateCampaign(campaignId);
+
+    const fooA = db.saveCampaignLink({ campaignId, url: 'https://t.me/fooA' });
+    const fooB = db.saveCampaignLink({ campaignId, url: 'https://t.me/fooB' });
+    const bar = db.saveCampaignLink({ campaignId, url: 'https://t.me/bar' });
+    db.markCampaignLinkResolved(fooA.id, { title: 'Foo Group' });
+    db.markCampaignLinkResolved(fooB.id, { title: 'Foo Group' });
+    db.markCampaignLinkResolved(bar.id, { title: 'Bar Group' });
+    const untitled = db.saveCampaignLink({ campaignId, url: 'https://t.me/plain' });
+
+    db.migrateDestinations();
+
+    const campaign = db.getCampaign();
+    expect(campaign.destinations.map((d) => d.name)).toEqual([
+      'Foo Group', 'Bar Group', 'Destino inicial',
+    ]);
+
+    const fooLinks = campaign.allLinks.filter((l) => l.destinationId === campaign.destinations[0].id);
+    expect(fooLinks.map((l) => l.url).sort()).toEqual(['https://t.me/fooA', 'https://t.me/fooB']);
+    expect(
+      campaign.allLinks.find((l) => l.id === untitled.id)?.destinationId,
+    ).toBe(campaign.destinations[2].id);
+
+    // One-time only: a second run never re-groups links added later
+    const later = db.saveCampaignLink({ campaignId, url: 'https://t.me/later' });
+    db.migrateDestinations();
+    expect(db.getCampaign().allLinks.find((l) => l.id === later.id)?.destinationId).toBeUndefined();
+    db.close();
+  });
+
+  it('duplicates a campaign with its destinations and link mapping', () => {
+    const db = new AutomationDatabase(':memory:');
+    const sourceId = db.getCampaign().id;
+    const destination = db.saveDestination({ campaignId: sourceId, name: 'Grupo X', weight: 4 });
+    db.saveCampaignLink({ campaignId: sourceId, url: 'https://t.me/x', destinationId: destination.id });
+    db.saveCampaignLink({ campaignId: sourceId, url: 'https://t.me/loose' });
+
+    const copyId = db.duplicateCampaign(sourceId, 'Cópia');
+    db.activateCampaign(copyId);
+    const active = db.getCampaign();
+    expect(active.destinations).toHaveLength(1);
+    expect(active.destinations[0].name).toBe('Grupo X');
+    expect(active.destinations[0].weight).toBe(4);
+
+    const copyAssigned = active.allLinks.find((l) => l.url === 'https://t.me/x');
+    // The copy's link points at the copy's own destination id
+    expect(copyAssigned?.destinationId).toBe(active.destinations[0].id);
+    expect(active.allLinks.find((l) => l.url === 'https://t.me/loose')?.destinationId).toBeUndefined();
+    db.close();
+  });
+
+  it('replaces campaign content mapping destinationIndex to local ids', () => {
+    const db = new AutomationDatabase(':memory:');
+    const campaignId = db.getCampaign().id;
+
+    db.replaceCampaignContent(
+      campaignId,
+      [{ title: 'T', content: 'oi {LINK}', weight: 2, isEnabled: true }],
+      [
+        { url: 'https://t.me/a', isEnabled: true, destinationIndex: 1 },
+        { url: 'https://t.me/b', isEnabled: true },
+        { url: 'https://t.me/c', isEnabled: false, destinationIndex: 0 },
+      ],
+      [
+        { name: 'Primeiro', weight: 3, isEnabled: true },
+        { name: 'Segundo', isEnabled: false },
+      ],
+    );
+
+    const campaign = db.getCampaign();
+    expect(campaign.destinations.map((d) => d.name)).toEqual(['Primeiro', 'Segundo']);
+    expect(campaign.destinations[0].weight).toBe(3);
+    expect(campaign.destinations[1].isEnabled).toBe(false);
+
+    expect(campaign.allLinks.find((l) => l.url === 'https://t.me/a')?.destinationId)
+      .toBe(campaign.destinations[1].id);
+    expect(campaign.allLinks.find((l) => l.url === 'https://t.me/b')?.destinationId).toBeUndefined();
+    expect(campaign.allLinks.find((l) => l.url === 'https://t.me/c')?.destinationId)
+      .toBe(campaign.destinations[0].id);
+    db.close();
+  });
+
+  it('stores destination attribution in send logs', () => {
+    const db = new AutomationDatabase(':memory:');
+    const now = Math.floor(Date.now() / 1000);
+    db.addLog({
+      createdAt: now,
+      templateId: 1,
+      destinationId: 7,
+      chatId: '-100',
+      chatTitle: 'G',
+      messageSnippet: 'm',
+      linkUsed: 'https://t.me/x',
+      status: 'SUCCESS',
+    });
+
+    const recent = db.getRecentLogs(5);
+    expect(recent[0].destinationId).toBe(7);
+    expect(recent[0].templateId).toBe(1);
+    db.close();
+  });
 });

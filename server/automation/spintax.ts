@@ -81,6 +81,66 @@ export function pickTemplate<T extends { weight: number; isEnabled: boolean }>(
   return enabled[enabled.length - 1];
 }
 
+export interface DestinationLike {
+  id: number;
+  weight: number;
+  isEnabled: boolean;
+}
+
+export interface LinkLike {
+  url: string;
+  isEnabled: boolean;
+  destinationId?: number;
+}
+
+// Resolves the link pool for a single send: a weighted-random pick among
+// enabled destinations that have at least one enabled link, returning that
+// destination's links. Loose (unassigned) links are only used when no
+// destination qualifies, so a focused destination never leaks other links
+export function pickPromotionPool<T extends DestinationLike, L extends LinkLike>(
+  destinations: T[],
+  links: L[],
+): { urls: string[]; destinationId?: number } {
+  const urlsByDestinationId = new Map<number, string[]>();
+  const looseUrls: string[] = [];
+
+  for (const link of links) {
+    if (!link.isEnabled) continue;
+    if (link.destinationId === undefined) {
+      looseUrls.push(link.url);
+      continue;
+    }
+    const bucket = urlsByDestinationId.get(link.destinationId);
+    if (bucket) bucket.push(link.url);
+    else urlsByDestinationId.set(link.destinationId, [link.url]);
+  }
+
+  const candidates = destinations.filter(
+    (destination) => destination.isEnabled
+      && (urlsByDestinationId.get(destination.id)?.length ?? 0) > 0,
+  );
+  if (!candidates.length) return { urls: looseUrls };
+
+  if (candidates.length === 1) {
+    return { urls: urlsByDestinationId.get(candidates[0].id)!, destinationId: candidates[0].id };
+  }
+
+  const weights = candidates.map((destination) => Math.max(1, Number(destination.weight) || 1));
+  const total = weights.reduce((sum, w) => sum + w, 0);
+
+  let roll = Math.random() * total;
+  let picked = candidates[candidates.length - 1];
+  for (let i = 0; i < candidates.length; i++) {
+    roll -= weights[i];
+    if (roll < 0) {
+      picked = candidates[i];
+      break;
+    }
+  }
+
+  return { urls: urlsByDestinationId.get(picked.id)!, destinationId: picked.id };
+}
+
 // Upper bound of unique messages a template × links can produce:
 // choices inside a group sum up (each choice may expand further),
 // sibling groups multiply

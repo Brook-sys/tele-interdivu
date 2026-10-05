@@ -64,6 +64,26 @@ describe('Orchestrator REST API', () => {
     expect(heartbeat.status).toBe(200);
     expect(heartbeat.data.desiredConfig).toBeDefined();
     expect(heartbeat.data.desiredCampaign).toBeDefined();
+    // Destinations sync by index so workers map them to their own local ids
+    expect(heartbeat.data.desiredCampaign.destinations).toEqual([]);
+    expect(heartbeat.data.desiredCampaign.allLinks).toEqual([]);
+
+    // Content with destinations arrives as index-based projections
+    const campaignId = ctx.db.getCampaign().id;
+    const destination = ctx.db.saveDestination({ campaignId, name: 'Grupo Sync', weight: 2 });
+    ctx.db.saveCampaignLink({ campaignId, url: 'https://t.me/sync', destinationId: destination.id });
+
+    const syncedHeartbeat = await api('heartbeat', {
+      method: 'POST',
+      body: JSON.stringify({
+        workerId: 'w1', apiUrl: 'http://w1.local', groups: ['-1'], status: { todaySent: 3 },
+      }),
+    });
+    const desired = syncedHeartbeat.data.desiredCampaign;
+    expect(desired.destinations).toEqual([{ name: 'Grupo Sync', weight: 2, isEnabled: true }]);
+    expect(desired.allLinks).toEqual([
+      { url: 'https://t.me/sync', isEnabled: true, destinationIndex: 0 },
+    ]);
 
     const claim = await api('claim', {
       method: 'POST',

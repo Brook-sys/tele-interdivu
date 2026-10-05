@@ -22,10 +22,12 @@ import {
   type AutomationGroupState,
   type AutomationLogItem,
   type AutomationStatusResponse,
+  type CampaignDestination,
   type CampaignLinkStats,
   type CampaignListItem,
   type CampaignPerformance,
   createCampaign,
+  deleteCampaignDestination,
   deleteCampaignLink,
   deleteCampaignTemplate,
   duplicateCampaign,
@@ -37,11 +39,13 @@ import {
   fetchCampaignLinkStats,
   fetchCampaignPerformance,
   fetchCampaigns,
+  focusCampaignDestination,
   forceNewAutomationRound,
   reconnectAutomationTelegram,
   renameCampaign,
   resolveCampaignLink,
   saveAutomationConfig,
+  saveCampaignDestination,
   saveCampaignLink,
   saveCampaignTemplate,
   sendCampaignTestMessage,
@@ -54,6 +58,8 @@ import { formatCountdownSeconds } from '../../../util/promo/countdownFormat';
 import {
   compileSpunMessage,
   countMessageVariations,
+  getActiveLinks,
+  pickPromotionPool,
   pickTemplate,
   validateSpintaxSyntax,
 } from '../../../util/promo/spintax';
@@ -145,6 +151,16 @@ const PromoAutomation = ({
   const [campaignsList, setCampaignsList] = useState<CampaignListItem[]>([]);
   const [performanceData, setPerformanceData] = useState<CampaignPerformance | undefined>();
 
+  // Destination editor draft and add-link target; 'unset' resolves to the
+  // first destination once campaign data arrives, so new links land in a
+  // destination instead of the loose pool by accident
+  const [editingDestination, setEditingDestination] = useState<{
+    id?: number;
+    name: string;
+    weight: string;
+  } | undefined>();
+  const [linkDestinationChoice, setLinkDestinationChoice] = useState<number | 'unset' | 'none'>('unset');
+
   // Settings form state
   const [mode, setMode] = useState<'manual' | 'continuous'>('manual');
   const [minDelay, setMinDelay] = useState('60');
@@ -176,6 +192,20 @@ const PromoAutomation = ({
 
   const folder = settings.folderId !== undefined ? foldersById[settings.folderId] : undefined;
   const targetChatIds = useMemo(() => folder?.includedChatIds || [], [folder]);
+
+  const destinations = campaign?.destinations ?? [];
+  const allLinks = campaign?.allLinks ?? [];
+  const looseLinks = allLinks.filter((l) => l.destinationId === undefined);
+
+  // Add-link target: an explicit choice wins; otherwise the first enabled
+  // destination, falling back to the loose pool when none exists
+  const chosenDestination = linkDestinationChoice !== 'unset' && linkDestinationChoice !== 'none'
+    ? destinations.find((d) => d.id === linkDestinationChoice)
+    : undefined;
+  const linkDestinationId: number | 'none' = linkDestinationChoice === 'none'
+    ? 'none'
+    : chosenDestination?.id
+      ?? (destinations.find((d) => d.isEnabled)?.id ?? destinations[0]?.id ?? 'none');
 
   const loadStatusAndData = useLastCallback(async () => {
     try {
@@ -476,7 +506,10 @@ const PromoAutomation = ({
     setActionError(undefined);
     markSubmitting();
     try {
-      const saved = await saveCampaignLink({ url });
+      const saved = await saveCampaignLink({
+        url,
+        destinationId: linkDestinationId === 'none' ? undefined : linkDestinationId,
+      });
       setNewLinkUrl('');
 
       // Best-effort immediate health check (one click = one read-only check)
@@ -509,6 +542,86 @@ const PromoAutomation = ({
     copyTextToClipboard(url);
     setCopiedUrl(url);
     setTimeout(() => setCopiedUrl(undefined), 1500);
+  });
+
+  const handleStartEditDestination = useLastCallback((destination?: CampaignDestination) => {
+    setEditingDestination(destination
+      ? { id: destination.id, name: destination.name, weight: String(destination.weight) }
+      : { name: '', weight: '1' });
+  });
+
+  const handleCancelEditDestination = useLastCallback(() => setEditingDestination(undefined));
+
+  const handleSaveDestination = useLastCallback(async () => {
+    if (!editingDestination) return;
+    const name = editingDestination.name.trim();
+    if (!name) return;
+
+    setActionError(undefined);
+    markSubmitting();
+    try {
+      await saveCampaignDestination({
+        id: editingDestination.id,
+        name,
+        weight: Math.max(1, Number(editingDestination.weight) || 1),
+      });
+      setEditingDestination(undefined);
+      await refreshCampaign();
+      showSavedFeedback();
+    } catch (err: any) {
+      setActionError(err.message);
+    } finally {
+      unmarkSubmitting();
+    }
+  });
+
+  const handleToggleDestinationEnabled = useLastCallback(
+    async (destination: CampaignDestination, isEnabled: boolean) => {
+      // Optimistic local toggle, reverted on failure
+      const patchCampaign = (nextEnabled: boolean) => {
+        setCampaign((current) => current && {
+          ...current,
+          destinations: current.destinations.map(
+            (d) => (d.id === destination.id ? { ...d, isEnabled: nextEnabled } : d),
+          ),
+        });
+      };
+
+      patchCampaign(isEnabled);
+      try {
+        await saveCampaignDestination({
+          id: destination.id,
+          name: destination.name,
+          isEnabled,
+        });
+      } catch (err: any) {
+        patchCampaign(!isEnabled);
+        setActionError(err.message);
+      }
+    },
+  );
+
+  const handleFocusDestination = useLastCallback(async (destination: CampaignDestination) => {
+    if (!window.confirm(lang('PromoAutomationFocusDestinationConfirm', { name: destination.name }))) return;
+    setActionError(undefined);
+    try {
+      const res = await focusCampaignDestination(destination.id);
+      setCampaign(res.campaign);
+      showSavedFeedback();
+    } catch (err: any) {
+      setActionError(err.message);
+    }
+  });
+
+  const handleDeleteDestination = useLastCallback(async (destination: CampaignDestination) => {
+    if (!window.confirm(lang('PromoAutomationDeleteDestinationConfirm'))) return;
+    setActionError(undefined);
+    try {
+      await deleteCampaignDestination(destination.id);
+      await refreshCampaign();
+    } catch (err: any) {
+      setActionError(err.message);
+    }
   });
 
   const handleRerollPreview = useLastCallback(() => setPreviewSeed(Date.now()));
@@ -879,8 +992,11 @@ const PromoAutomation = ({
     );
   };
 
-  const enabledLinks = useMemo(
-    () => (campaign?.allLinks ?? []).filter((l) => l.isEnabled).map((l) => l.url),
+  // Links reachable by the current rotation (enabled destinations' links, or
+  // loose ones when no destination is active) — the health counter reflects
+  // what can actually be sent
+  const activeLinksForCount = useMemo(
+    () => getActiveLinks(campaign?.destinations ?? [], campaign?.allLinks ?? []),
     [campaign],
   );
 
@@ -888,7 +1004,9 @@ const PromoAutomation = ({
     // previewSeed forces a fresh random pick on re-roll
     const seed = previewSeed;
     const template = pickTemplate(campaign?.templates ?? [], rotationEnabled);
-    return { seed, template };
+    // Same pick the scheduler uses: one destination by weight, one of its links
+    const pool = pickPromotionPool(campaign?.destinations ?? [], campaign?.allLinks ?? []);
+    return { seed, template, pool };
   }, [campaign, rotationEnabled, previewSeed]);
 
   // While editing, the preview follows the draft content live
@@ -896,16 +1014,382 @@ const PromoAutomation = ({
 
   const previewMessage = useMemo(() => {
     if (previewContent === undefined) return undefined;
-    return compileSpunMessage(previewContent, enabledLinks).messageText;
-  }, [previewContent, enabledLinks]);
+    return compileSpunMessage(previewContent, savedPreview.pool.urls).messageText;
+  }, [previewContent, savedPreview]);
 
   const previewVariations = previewContent !== undefined
-    ? countMessageVariations(previewContent, enabledLinks) : 0;
+    ? countMessageVariations(previewContent, activeLinksForCount) : 0;
   const isLowVariety = previewVariations > 0 && previewVariations < MIN_HEALTHY_VARIATIONS;
+
+  const renderLinkRow = (link: AutomationCampaignLink) => {
+    const stats = linkStats.find((stat) => stat.id === link.id);
+    const isResolving = resolvingLinkId === link.id;
+    const isTrackableLink = /^https?:\/\/t\.me\/(?:\+|joinchat\/|[A-Za-z][A-Za-z0-9_]{3,})/i.test(link.url);
+    const tooltipParts = [
+      stats?.resolvedTitle,
+      stats?.resolvedAbout,
+    ].filter(Boolean);
+    const deltaSuffix = stats?.membersDelta !== undefined && stats.membersDelta !== 0
+      ? ` (${stats.membersDelta > 0 ? '+' : ''}${stats.membersDelta})`
+      : '';
+
+    return (
+      <div
+        key={link.id}
+        className={buildClassName(
+          styles.linkItem,
+          !link.isEnabled && styles.linkItemOff,
+        )}
+      >
+        <div className={styles.linkMain}>
+          <Checkbox
+            checked={link.isEnabled}
+            onCheck={(isEnabled) => handleToggleLinkEnabled(link, isEnabled)}
+          />
+          <span
+            className={styles.linkUrl}
+            title={tooltipParts.join('\n') || undefined}
+          >
+            {link.url}
+          </span>
+          {copiedUrl === link.url && (
+            <span className={styles.linkCopiedHint}>{lang('PromoAutomationLinkCopied')}</span>
+          )}
+          <div className={styles.linkActions}>
+            {isTrackableLink && (
+              <Button
+                round
+                size="smaller"
+                color="translucent"
+                ariaLabel={lang('PromoAutomationCheckMembers')}
+                iconName="stats"
+                disabled={isResolving}
+                onClick={() => handleCheckLinkMembers(link)}
+              />
+            )}
+            <Button
+              round
+              size="smaller"
+              color="translucent"
+              ariaLabel={lang('PromoAutomationCopyLink')}
+              iconName="copy"
+              onClick={() => handleCopyLink(link.url)}
+            />
+            <Button
+              round
+              size="smaller"
+              color="translucent"
+              ariaLabel={lang('PromoAutomationDelete')}
+              iconName="delete"
+              onClick={() => handleDeleteLink(link)}
+            />
+          </div>
+        </div>
+        <div className={styles.linkMeta}>
+          {stats && stats.totalSends > 0 && (
+            <span>
+              {lang(
+                'PromoAutomationLinkSends',
+                { count: stats.totalSends },
+                { pluralValue: stats.totalSends },
+              )}
+              {' ('}
+              {lang(
+                'PromoAutomationLinkSends24h',
+                { count: stats.last24hSends },
+                { pluralValue: stats.last24hSends },
+              )}
+              )
+            </span>
+          )}
+          {stats?.resolvedMembers !== undefined && (
+            <span>
+              {lang(
+                'PromoAutomationMembersCount',
+                { count: stats.resolvedMembers },
+                { pluralValue: stats.resolvedMembers },
+              )}
+              {deltaSuffix}
+            </span>
+          )}
+          {stats?.resolvedFailed && (
+            <span className={styles.linkInvalid}>
+              {lang('PromoAutomationLinkInvalid')}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderAddLinkRow = (hasDestinations: boolean) => {
+    return (
+      <div>
+        {hasDestinations && (
+          <select
+            className={styles.addLinkSelect}
+            value={String(linkDestinationId)}
+            aria-label={lang('PromoAutomationAddLinkDestinationLabel')}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+              const value = e.target.value;
+              setLinkDestinationChoice(value === 'none' ? 'none' : Number(value));
+            }}
+          >
+            {destinations.map((destination) => (
+              <option key={destination.id} value={destination.id}>
+                {destination.name}
+              </option>
+            ))}
+            <option value="none">{lang('PromoAutomationLinkNoDestination')}</option>
+          </select>
+        )}
+        <div className={styles.addLinkRow}>
+          <InputText
+            noMargin
+            className={styles.addLinkInput}
+            placeholder={lang('PromoAutomationLinkUrlPlaceholder')}
+            value={newLinkUrl}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setNewLinkUrl(e.target.value)}
+          />
+          <Button
+            fluid
+            size="smaller"
+            disabled={isSubmitting || !newLinkUrl.trim()}
+            onClick={handleAddLink}
+          >
+            {lang('PromoAutomationAddLink')}
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderTrackingControls = () => {
+    return (
+      <>
+        <div className={styles.checkboxRow}>
+          <Checkbox
+            checked={trackingEnabled}
+            onCheck={handleToggleTracking}
+            label={lang('PromoAutomationMemberTrackingLabel')}
+          />
+        </div>
+        {trackingEnabled && (
+          <>
+            <InputText
+              noMargin
+              label={lang('PromoAutomationMemberTrackingInterval')}
+              value={trackingInterval}
+              inputMode="numeric"
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setTrackingInterval(e.target.value)}
+              onBlur={(e: React.FocusEvent<HTMLInputElement>) => void handleSaveTrackingInterval(e.target.value)}
+            />
+            <div className={styles.trackingHint}>
+              {lang('PromoAutomationMemberTrackingHint')}
+            </div>
+          </>
+        )}
+      </>
+    );
+  };
+
+  const renderDestinationsSection = () => {
+    const editingName = editingDestination?.name.trim();
+
+    return (
+      <div className={styles.sectionGroup}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.fieldLabel}>{lang('PromoAutomationDestinationsLabel')}</span>
+          {!editingDestination && (
+            <Button fluid size="smaller" color="translucent" onClick={() => handleStartEditDestination()}>
+              {lang('PromoAutomationNewDestination')}
+            </Button>
+          )}
+        </div>
+        <div className={styles.sectionHint}>{lang('PromoAutomationDestinationsHint')}</div>
+
+        {editingDestination && (
+          <div className={styles.destinationEdit}>
+            <InputText
+              noMargin
+              label={lang('PromoAutomationDestinationNameLabel')}
+              value={editingDestination.name}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setEditingDestination({
+                ...editingDestination,
+                name: e.target.value,
+              })}
+            />
+            <div className={styles.templateEditRow}>
+              <InputText
+                noMargin
+                className={styles.weightInput}
+                label={lang('PromoAutomationTemplateWeight')}
+                value={editingDestination.weight}
+                inputMode="numeric"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setEditingDestination({
+                  ...editingDestination,
+                  weight: e.target.value,
+                })}
+              />
+              <Button fluid size="smaller" onClick={handleCancelEditDestination}>
+                {lang('PromoAutomationCancel')}
+              </Button>
+              <Button
+                fluid
+                size="smaller"
+                color="primary"
+                disabled={isSubmitting || !editingName}
+                onClick={handleSaveDestination}
+              >
+                {lang('PromoAutomationSave')}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {!destinations.length && !editingDestination && (
+          <div className={styles.emptyText}>{lang('PromoAutomationNoDestinations')}</div>
+        )}
+
+        {destinations.filter((d) => d.id !== editingDestination?.id).map((destination) => {
+          const destinationLinks = allLinks.filter((l) => l.destinationId === destination.id);
+          const destinationStats = destinationLinks
+            .map((link) => linkStats.find((stat) => stat.id === link.id))
+            .filter(Boolean);
+          const totalSends = destinationStats.reduce((sum, stat) => sum + (stat?.totalSends ?? 0), 0);
+          const sends24h = destinationStats.reduce((sum, stat) => sum + (stat?.last24hSends ?? 0), 0);
+          const members = destinationStats.find((stat) => stat?.resolvedMembers !== undefined)?.resolvedMembers;
+
+          return (
+            <div
+              key={destination.id}
+              className={buildClassName(
+                styles.destinationCard,
+                !destination.isEnabled && styles.destinationCardOff,
+              )}
+            >
+              <div className={styles.destinationHead}>
+                <Checkbox
+                  checked={destination.isEnabled}
+                  onCheck={(isEnabled) => handleToggleDestinationEnabled(destination, isEnabled)}
+                />
+                <div className={styles.destinationInfo}>
+                  <div className={styles.destinationName}>{destination.name}</div>
+                  <div className={styles.destinationMeta}>
+                    {lang(
+                      'PromoAutomationDestinationLinks',
+                      { count: destinationLinks.length },
+                      { pluralValue: destinationLinks.length },
+                    )}
+                    {totalSends > 0 && (
+                      <>
+                        {' · '}
+                        {lang(
+                          'PromoAutomationLinkSends',
+                          { count: totalSends },
+                          { pluralValue: totalSends },
+                        )}
+                        {' ('}
+                        {lang(
+                          'PromoAutomationLinkSends24h',
+                          { count: sends24h },
+                          { pluralValue: sends24h },
+                        )}
+                        )
+                      </>
+                    )}
+                    {members !== undefined && (
+                      <>
+                        {' · '}
+                        {lang(
+                          'PromoAutomationMembersCount',
+                          { count: members },
+                          { pluralValue: members },
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+                <span
+                  className={styles.destinationWeight}
+                  title={lang('PromoAutomationTemplateWeight')}
+                >
+                  ×
+                  {destination.weight}
+                </span>
+                <div className={styles.linkActions}>
+                  <Button
+                    fluid
+                    size="smaller"
+                    color="translucent"
+                    disabled={isSubmitting}
+                    onClick={() => handleFocusDestination(destination)}
+                  >
+                    {lang('PromoAutomationFocusDestination')}
+                  </Button>
+                  <Button
+                    round
+                    size="smaller"
+                    color="translucent"
+                    ariaLabel={lang('PromoAutomationEdit')}
+                    iconName="edit"
+                    onClick={() => handleStartEditDestination(destination)}
+                  />
+                  <Button
+                    round
+                    size="smaller"
+                    color="translucent"
+                    ariaLabel={lang('PromoAutomationDelete')}
+                    iconName="delete"
+                    onClick={() => handleDeleteDestination(destination)}
+                  />
+                </div>
+              </div>
+              {destinationLinks.length > 0 && (
+                <div className={styles.destinationLinks}>
+                  {destinationLinks.map(renderLinkRow)}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {destinations.length > 0 && looseLinks.length > 0 && (
+          <>
+            <div className={styles.looseHeader}>{lang('PromoAutomationLooseLinksLabel')}</div>
+            <div className={styles.sectionHint}>{lang('PromoAutomationLooseLinksHint')}</div>
+            {looseLinks.map(renderLinkRow)}
+          </>
+        )}
+
+        {destinations.length > 0 && (
+          <>
+            {renderAddLinkRow(true)}
+            {renderTrackingControls()}
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const renderLegacyLinksSection = () => {
+    return (
+      <div className={styles.sectionGroup}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.fieldLabel}>{lang('PromoAutomationLinksLabel')}</span>
+        </div>
+        {!allLinks.length && (
+          <div className={styles.emptyText}>{lang('PromoAutomationNoLinks')}</div>
+        )}
+        {allLinks.map(renderLinkRow)}
+        {renderAddLinkRow(false)}
+        {renderTrackingControls()}
+      </div>
+    );
+  };
 
   const renderCampaignTab = () => {
     const templates = campaign?.templates ?? [];
-    const links = campaign?.allLinks ?? [];
     const editingValidation = editingTemplate
       ? validateSpintaxSyntax(editingTemplate.content) : undefined;
 
@@ -1058,7 +1542,7 @@ const PromoAutomation = ({
           )}
 
           {templates.filter((t) => t.id !== editingTemplate?.id).map((template) => {
-            const templateVariations = countMessageVariations(template.content, enabledLinks);
+            const templateVariations = countMessageVariations(template.content, activeLinksForCount);
             return (
               <div
                 key={template.id}
@@ -1119,154 +1603,8 @@ const PromoAutomation = ({
           })}
         </div>
 
-        <div className={styles.sectionGroup}>
-          <div className={styles.sectionHeader}>
-            <span className={styles.fieldLabel}>{lang('PromoAutomationLinksLabel')}</span>
-          </div>
-          {!links.length && (
-            <div className={styles.emptyText}>{lang('PromoAutomationNoLinks')}</div>
-          )}
-          {links.map((link) => {
-            const stats = linkStats.find((stat) => stat.id === link.id);
-            const isResolving = resolvingLinkId === link.id;
-            const isTrackableLink = /^https?:\/\/t\.me\/(?:\+|joinchat\/|[A-Za-z][A-Za-z0-9_]{3,})/i.test(link.url);
-            const tooltipParts = [
-              stats?.resolvedTitle,
-              stats?.resolvedAbout,
-            ].filter(Boolean);
-            const deltaSuffix = stats?.membersDelta !== undefined && stats.membersDelta !== 0
-              ? ` (${stats.membersDelta > 0 ? '+' : ''}${stats.membersDelta})`
-              : '';
-
-            return (
-              <div
-                key={link.id}
-                className={buildClassName(
-                  styles.linkItem,
-                  !link.isEnabled && styles.linkItemOff,
-                )}
-              >
-                <div className={styles.linkMain}>
-                  <Checkbox
-                    checked={link.isEnabled}
-                    onCheck={(isEnabled) => handleToggleLinkEnabled(link, isEnabled)}
-                  />
-                  <span
-                    className={styles.linkUrl}
-                    title={tooltipParts.join('\n') || undefined}
-                  >
-                    {link.url}
-                  </span>
-                  {copiedUrl === link.url && (
-                    <span className={styles.linkCopiedHint}>{lang('PromoAutomationLinkCopied')}</span>
-                  )}
-                  <div className={styles.linkActions}>
-                    {isTrackableLink && (
-                      <Button
-                        round
-                        size="smaller"
-                        color="translucent"
-                        ariaLabel={lang('PromoAutomationCheckMembers')}
-                        iconName="stats"
-                        disabled={isResolving}
-                        onClick={() => handleCheckLinkMembers(link)}
-                      />
-                    )}
-                    <Button
-                      round
-                      size="smaller"
-                      color="translucent"
-                      ariaLabel={lang('PromoAutomationCopyLink')}
-                      iconName="copy"
-                      onClick={() => handleCopyLink(link.url)}
-                    />
-                    <Button
-                      round
-                      size="smaller"
-                      color="translucent"
-                      ariaLabel={lang('PromoAutomationDelete')}
-                      iconName="delete"
-                      onClick={() => handleDeleteLink(link)}
-                    />
-                  </div>
-                </div>
-                <div className={styles.linkMeta}>
-                  {stats && stats.totalSends > 0 && (
-                    <span>
-                      {lang(
-                        'PromoAutomationLinkSends',
-                        { count: stats.totalSends },
-                        { pluralValue: stats.totalSends },
-                      )}
-                      {' ('}
-                      {lang(
-                        'PromoAutomationLinkSends24h',
-                        { count: stats.last24hSends },
-                        { pluralValue: stats.last24hSends },
-                      )}
-                      )
-                    </span>
-                  )}
-                  {stats?.resolvedMembers !== undefined && (
-                    <span>
-                      {lang(
-                        'PromoAutomationMembersCount',
-                        { count: stats.resolvedMembers },
-                        { pluralValue: stats.resolvedMembers },
-                      )}
-                      {deltaSuffix}
-                    </span>
-                  )}
-                  {stats?.resolvedFailed && (
-                    <span className={styles.linkInvalid}>
-                      {lang('PromoAutomationLinkInvalid')}
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-          <div className={styles.addLinkRow}>
-            <InputText
-              noMargin
-              className={styles.addLinkInput}
-              placeholder={lang('PromoAutomationLinkUrlPlaceholder')}
-              value={newLinkUrl}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setNewLinkUrl(e.target.value)}
-            />
-            <Button
-              fluid
-              size="smaller"
-              disabled={isSubmitting || !newLinkUrl.trim()}
-              onClick={handleAddLink}
-            >
-              {lang('PromoAutomationAddLink')}
-            </Button>
-          </div>
-
-          <div className={styles.checkboxRow}>
-            <Checkbox
-              checked={trackingEnabled}
-              onCheck={handleToggleTracking}
-              label={lang('PromoAutomationMemberTrackingLabel')}
-            />
-          </div>
-          {trackingEnabled && (
-            <>
-              <InputText
-                noMargin
-                label={lang('PromoAutomationMemberTrackingInterval')}
-                value={trackingInterval}
-                inputMode="numeric"
-                onChange={(e: ChangeEvent<HTMLInputElement>) => setTrackingInterval(e.target.value)}
-                onBlur={(e: React.FocusEvent<HTMLInputElement>) => void handleSaveTrackingInterval(e.target.value)}
-              />
-              <div className={styles.trackingHint}>
-                {lang('PromoAutomationMemberTrackingHint')}
-              </div>
-            </>
-          )}
-        </div>
+        {renderDestinationsSection()}
+        {destinations.length === 0 && renderLegacyLinksSection()}
       </div>
     );
   };

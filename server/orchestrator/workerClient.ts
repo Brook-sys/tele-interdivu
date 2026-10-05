@@ -16,7 +16,8 @@ interface HeartbeatResponse {
     spintaxTemplate?: string;
     links?: string[];
     templates?: { title: string; content: string; weight: number; isEnabled: boolean }[];
-    allLinks?: { url: string; isEnabled: boolean }[];
+    allLinks?: { url: string; isEnabled: boolean; destinationIndex?: number }[];
+    destinations?: { name: string; weight: number; isEnabled: boolean }[];
   };
 }
 
@@ -76,8 +77,16 @@ export class OrchestratorWorkerClient {
       .join('\u0001');
   }
 
-  private projectLinks(links: { url: string; isEnabled: boolean }[]) {
-    return links.map((l) => `${l.url}\u0000${l.isEnabled}`).join('\u0001');
+  private projectLinks(links: { url: string; isEnabled: boolean; destinationIndex?: number }[]) {
+    return links
+      .map((l) => `${l.url}\u0000${l.isEnabled}\u0000${l.destinationIndex ?? ''}`)
+      .join('\u0001');
+  }
+
+  private projectDestinations(destinations: { name: string; weight: number; isEnabled: boolean }[]) {
+    return destinations
+      .map((d) => `${d.name}\u0000${d.weight}\u0000${d.isEnabled}`)
+      .join('\u0001');
   }
 
   private applyDesiredCampaign(desired: NonNullable<HeartbeatResponse['desiredCampaign']>) {
@@ -85,7 +94,36 @@ export class OrchestratorWorkerClient {
 
     if (desired.templates?.length) {
       const desiredLinks = desired.allLinks?.length
-        ? desired.allLinks : (desired.links || []).map((url) => ({ url }));
+        ? desired.allLinks
+        // Legacy payload: a plain url list means enabled links
+        : (desired.links || []).map((url) => ({ url, isEnabled: true }));
+
+      if (desired.destinations !== undefined) {
+        // New format: destinations included — full content replace, with
+        // links referencing destinations by index (local ids differ from the master's)
+        const destinationIndexById = new Map(
+          current.destinations.map((destination, index) => [destination.id, index]),
+        );
+        const currentLinks = current.allLinks.map((link) => ({
+          url: link.url,
+          isEnabled: link.isEnabled,
+          destinationIndex: link.destinationId !== undefined
+            ? destinationIndexById.get(link.destinationId) : undefined,
+        }));
+
+        const isChanged = this.projectTemplates(current.templates) !== this.projectTemplates(desired.templates)
+          || this.projectLinks(currentLinks) !== this.projectLinks(desiredLinks)
+          || this.projectDestinations(current.destinations) !== this.projectDestinations(desired.destinations);
+        if (isChanged) {
+          this.db.replaceCampaignContent(
+            current.id, desired.templates, desiredLinks, desired.destinations,
+          );
+        }
+        return;
+      }
+
+      // Legacy multi-template payload from an older master image — local
+      // destinations are preserved, links come back unassigned
       const isChanged = this.projectTemplates(current.templates) !== this.projectTemplates(desired.templates)
         || this.projectLinks(current.allLinks) !== this.projectLinks(desiredLinks);
       if (isChanged) {
@@ -96,7 +134,7 @@ export class OrchestratorWorkerClient {
 
     // Legacy single-template payload from an older master image
     if (desired.spintaxTemplate) {
-      const desiredLinks = (desired.links || []).map((url) => ({ url }));
+      const desiredLinks = (desired.links || []).map((url) => ({ url, isEnabled: true }));
       const isChanged = current.spintaxTemplate !== desired.spintaxTemplate
         || this.projectLinks(current.allLinks) !== this.projectLinks(desiredLinks);
       if (isChanged) {

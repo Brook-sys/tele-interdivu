@@ -463,3 +463,24 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     quebrava o ritmo), abas em grid fixo de 3 colunas (6 abas não
     transbordam mais), badge de status com ellipsis, linha de peso+ações
     do template redesenhada e `flex-wrap` nas ações de exportação.
+
+63. **Destinos de divulgação — intercalar grupos na mesma campanha** — Nova
+    tabela `destinations` (nome, peso, toggle ativo, ordem) agrupa os links
+    de convite do mesmo grupo promovido; `campaign_links.destination_id`
+    liga cada link a um destino (nulo = "avulso") e `logs.destination_id`
+    grava a atribuição de cada envio para o futuro dashboard de conversão.
+    Sem envio: o scheduler sorteia UM destino ativo por peso (peso 4 vs 1 ≈
+    80/20) e usa um link dele no `{LINK}`; links avulsos só entram quando
+    nenhum destino ativo tem link ativo — um destino focado nunca vaza
+    links de outro grupo. A "seleção" É o toggle do destino (nada de modo
+    global): "Focar" ativa só aquele; todos marcados = intercalação geral.
+    Zero superfície nova de detecção: só o link dentro da mensagem muda,
+    a pasta de envio e o pacing continuam idênticos. Migração one-shot no
+    primeiro boot agrupa os links existentes por `resolved_title` (resto
+    vira "Destino inicial"); duplicar campanha copia destinos com o
+    mapeamento remontado; sync do orquestrador envia destinos por índice
+    (worker mapeia para os ids locais). UI: seção "Destinos de Divulgação"
+    com cards (toggle, envios 24h, membros, peso), links aninhados dentro
+    de cada card, grupo "Avulsos", select de destino ao adicionar link e
+    prévia sorteando o mesmo pool do envio real (de passagem corrigiu o
+    reroll da prévia, que não re-sortava com rotação desligada).

@@ -116,6 +116,11 @@ export function createOrchestratorHandler(
         const campaign = db.getCampaign();
         coordinator.rebalanceMetaTargets(config.roundTargetSends, serverNow);
 
+        // Destinations sync by index (worker assigns its own local ids)
+        const destinationIndexById = new Map(
+          campaign.destinations.map((destination, index) => [destination.id, index]),
+        );
+
         const worker = coordinator.getWorker(body.workerId);
         sendJson(res, 200, {
           serverNow,
@@ -145,7 +150,17 @@ export function createOrchestratorHandler(
             spintaxTemplate: campaign.spintaxTemplate,
             links: campaign.links,
             templates: campaign.templates,
-            allLinks: campaign.allLinks,
+            allLinks: campaign.allLinks.map((link) => ({
+              url: link.url,
+              isEnabled: link.isEnabled,
+              destinationIndex: link.destinationId !== undefined
+                ? destinationIndexById.get(link.destinationId) : undefined,
+            })),
+            destinations: campaign.destinations.map((destination) => ({
+              name: destination.name,
+              weight: destination.weight,
+              isEnabled: destination.isEnabled,
+            })),
           },
         });
         return true;

@@ -2418,6 +2418,17 @@ export interface LangPair {
   'PromoAutomationCancel': undefined;
   'PromoAutomationDeleteTemplateConfirm': undefined;
   'PromoAutomationNoTemplates': undefined;
+  'PromoAutomationDestinationsLabel': undefined;
+  'PromoAutomationNewDestination': undefined;
+  'PromoAutomationDestinationsHint': undefined;
+  'PromoAutomationNoDestinations': undefined;
+  'PromoAutomationDestinationNameLabel': undefined;
+  'PromoAutomationFocusDestination': undefined;
+  'PromoAutomationDeleteDestinationConfirm': undefined;
+  'PromoAutomationLooseLinksLabel': undefined;
+  'PromoAutomationLooseLinksHint': undefined;
+  'PromoAutomationLinkNoDestination': undefined;
+  'PromoAutomationAddLinkDestinationLabel': undefined;
   'PromoAutomationNoLinks': undefined;
   'PromoAutomationAddLink': undefined;
   'PromoAutomationLinkUrlPlaceholder': undefined;
@@ -4160,6 +4171,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'SettingsLanguageDesc': {
     'language': V;
   };
+  'PromoAutomationFocusDestinationConfirm': {
+    'name': V;
+  };
   'PromoAutomationPerfSuccess': {
     'rate': V;
   };
@@ -4709,6 +4723,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'PromoAutomationVariations': {
+    'count': V;
+  };
+  'PromoAutomationDestinationLinks': {
     'count': V;
   };
   'PromoAutomationLinkSends': {

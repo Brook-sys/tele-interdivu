@@ -363,6 +363,68 @@ describe('Automation REST API routes', () => {
     const del = await api(`campaign/links/${postRes.data.id}`, { method: 'DELETE' });
     expect(del.status).toBe(200);
   });
+
+  it('manages campaign destinations via REST (create, assign, focus, delete)', async () => {
+    const noName = await api('campaign/destinations', { method: 'POST', body: JSON.stringify({}) });
+    expect(noName.status).toBe(400);
+
+    const create = await api('campaign/destinations', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Grupo REST', weight: 3 }),
+    });
+    expect(create.status).toBe(200);
+    expect(create.data.name).toBe('Grupo REST');
+    expect(create.data.weight).toBe(3);
+    expect(create.data.isEnabled).toBe(true);
+
+    const update = await api('campaign/destinations', {
+      method: 'POST',
+      body: JSON.stringify({ id: create.data.id, isEnabled: false }),
+    });
+    expect(update.status).toBe(200);
+    expect(update.data.name).toBe('Grupo REST');
+    expect(update.data.isEnabled).toBe(false);
+
+    const missing = await api('campaign/destinations', {
+      method: 'POST',
+      body: JSON.stringify({ id: 99999, name: 'x' }),
+    });
+    expect(missing.status).toBe(404);
+
+    const addLink = await api('campaign/links', {
+      method: 'POST',
+      body: JSON.stringify({ url: 'https://t.me/dest-rest', destinationId: create.data.id }),
+    });
+    expect(addLink.status).toBe(200);
+    expect(addLink.data.destinationId).toBe(create.data.id);
+
+    const badDestination = await api('campaign/links', {
+      method: 'POST',
+      body: JSON.stringify({ url: 'https://t.me/dest-bad', destinationId: 99999 }),
+    });
+    expect(badDestination.status).toBe(400);
+
+    const focus = await api('campaign/destinations/focus', {
+      method: 'POST',
+      body: JSON.stringify({ id: create.data.id }),
+    });
+    expect(focus.status).toBe(200);
+    expect(focus.data.campaign.destinations[0].isEnabled).toBe(true);
+
+    const focusMissing = await api('campaign/destinations/focus', {
+      method: 'POST',
+      body: JSON.stringify({ id: 99999 }),
+    });
+    expect(focusMissing.status).toBe(404);
+
+    const del = await api(`campaign/destinations/${create.data.id}`, { method: 'DELETE' });
+    expect(del.status).toBe(200);
+    const campaign = await api('campaign');
+    expect(campaign.data.destinations).toHaveLength(0);
+    // Deleting the destination keeps its links as loose
+    expect(campaign.data.allLinks.find((l: any) => l.id === addLink.data.id).destinationId)
+      .toBeUndefined();
+  });
 });
 
 describe('Extractor REST API', () => {

@@ -4,6 +4,7 @@ import {
   compileSpunMessage,
   countMessageVariations,
   parseSpintax,
+  pickPromotionPool,
   pickTemplate,
   validateSpintaxSyntax,
 } from './spintax';
@@ -123,5 +124,87 @@ describe('countMessageVariations', () => {
 
   it('returns 1 for a template without groups or links', () => {
     expect(countMessageVariations('mensagem fixa', [])).toBe(1);
+  });
+});
+
+describe('pickPromotionPool', () => {
+  it('returns the single enabled destination deterministically', () => {
+    const destinations = [{ id: 1, name: 'X', weight: 1, isEnabled: true }];
+    const links = [
+      { url: 'https://t.me/a', isEnabled: true, destinationId: 1 },
+      { url: 'https://t.me/b', isEnabled: true, destinationId: 1 },
+      { url: 'https://t.me/loose', isEnabled: true },
+    ];
+
+    const pool = pickPromotionPool(destinations, links);
+    expect(pool.destinationId).toBe(1);
+    expect(pool.urls).toEqual(['https://t.me/a', 'https://t.me/b']);
+  });
+
+  it('falls back to loose links when no destination qualifies', () => {
+    const destinations = [
+      { id: 1, name: 'off', weight: 1, isEnabled: false },
+      { id: 2, name: 'no links', weight: 1, isEnabled: true },
+      { id: 3, name: 'disabled links', weight: 1, isEnabled: true },
+    ];
+    const links = [
+      { url: 'https://t.me/loose1', isEnabled: true },
+      { url: 'https://t.me/loose2', isEnabled: true },
+      { url: 'https://t.me/c3', isEnabled: false, destinationId: 3 },
+    ];
+
+    const pool = pickPromotionPool(destinations, links);
+    expect(pool.destinationId).toBeUndefined();
+    expect(pool.urls).toEqual(['https://t.me/loose1', 'https://t.me/loose2']);
+  });
+
+  it('never returns an empty pool while enabled links exist', () => {
+    const destinations = [{ id: 1, name: 'X', weight: 1, isEnabled: true }];
+    const links = [{ url: 'https://t.me/a', isEnabled: true, destinationId: 1 }];
+    for (let i = 0; i < 20; i++) {
+      expect(pickPromotionPool(destinations, links).urls).toHaveLength(1);
+    }
+  });
+
+  it('picks weighted-random among enabled destinations with enabled links', () => {
+    const destinations = [
+      { id: 1, name: 'a', weight: 1, isEnabled: true },
+      { id: 2, name: 'b', weight: 3, isEnabled: true },
+      { id: 3, name: 'off', weight: 1, isEnabled: false },
+    ];
+    const links = [
+      { url: 'https://t.me/a', isEnabled: true, destinationId: 1 },
+      { url: 'https://t.me/b', isEnabled: true, destinationId: 2 },
+      { url: 'https://t.me/c', isEnabled: true, destinationId: 3 },
+    ];
+
+    const counts: Record<number, number> = { 1: 0, 2: 0, 3: 0 };
+    for (let i = 0; i < 4000; i++) {
+      counts[pickPromotionPool(destinations, links).destinationId!]++;
+    }
+
+    // Roughly 25% / 75% split with a tolerance band for randomness;
+    // disabled destinations are never picked
+    expect(counts[1]).toBeGreaterThan(700);
+    expect(counts[1]).toBeLessThan(1300);
+    expect(counts[2]).toBeGreaterThan(2700);
+    expect(counts[3]).toBe(0);
+  });
+
+  it('treats weight below 1 as 1 so a destination is never impossible to pick', () => {
+    const destinations = [
+      { id: 1, name: 'a', weight: 0, isEnabled: true },
+      { id: 2, name: 'b', weight: 5, isEnabled: true },
+    ];
+    const links = [
+      { url: 'https://t.me/a', isEnabled: true, destinationId: 1 },
+      { url: 'https://t.me/b', isEnabled: true, destinationId: 2 },
+    ];
+
+    const picked = new Set<number>();
+    for (let i = 0; i < 200; i++) {
+      picked.add(pickPromotionPool(destinations, links).destinationId!);
+    }
+    expect(picked.has(1)).toBe(true);
   });
 });

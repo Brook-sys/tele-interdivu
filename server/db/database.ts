@@ -38,12 +38,23 @@ export interface CampaignTemplateRecord {
   updatedAt: number;
 }
 
+export interface CampaignDestinationRecord {
+  id: number;
+  name: string;
+  weight: number;
+  isEnabled: boolean;
+  position: number;
+  updatedAt: number;
+}
+
 export interface CampaignLinkRecord {
   id: number;
   url: string;
   isEnabled: boolean;
   position: number;
   updatedAt: number;
+  // Owning destination; undefined means a loose link (no destination)
+  destinationId?: number;
   resolvedTitle?: string;
   resolvedMembers?: number;
   resolvedType?: string;
@@ -60,6 +71,8 @@ export interface AutomationCampaign {
   // Content of the first enabled template (convenience/compat field)
   spintaxTemplate: string;
   templates: CampaignTemplateRecord[];
+  // Promotion destinations; each send picks one enabled destination by weight
+  destinations: CampaignDestinationRecord[];
   // Enabled link urls (convenience/compat field)
   links: string[];
   allLinks: CampaignLinkRecord[];
@@ -84,6 +97,8 @@ export interface AutomationLogRecord {
   id?: number;
   createdAt: number;
   templateId?: number;
+  // Destination whose link was promoted in this send (attribution snapshot)
+  destinationId?: number;
   chatId: string;
   chatTitle: string;
   messageSnippet: string;
@@ -222,6 +237,17 @@ export class AutomationDatabase {
         resolved_photo_b64 TEXT,
         resolved_at INTEGER,
         resolved_failed INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS destinations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        weight INTEGER NOT NULL DEFAULT 1,
+        is_enabled INTEGER NOT NULL DEFAULT 1,
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS link_snapshots (
@@ -402,6 +428,9 @@ export class AutomationDatabase {
       'ALTER TABLE campaign_links ADD COLUMN resolved_photo_b64 TEXT',
       'ALTER TABLE campaign_links ADD COLUMN resolved_at INTEGER',
       'ALTER TABLE campaign_links ADD COLUMN resolved_failed INTEGER',
+      'ALTER TABLE campaign_links ADD COLUMN destination_id INTEGER',
+      'ALTER TABLE logs ADD COLUMN destination_id INTEGER',
+      'ALTER TABLE campaigns ADD COLUMN destinations_migrated INTEGER NOT NULL DEFAULT 0',
     ]) {
       try {
         this.db.exec(ddl);
@@ -440,6 +469,9 @@ export class AutomationDatabase {
 
     // Seed the new campaign tables from the legacy single-row format
     this.migrateLegacyCampaign();
+
+    // Group existing links into destinations (one-time per campaign)
+    this.migrateDestinations();
 
     // Ensure initial config row exists
     const row = this.db.prepare('SELECT id FROM config WHERE id = 1').get();
@@ -599,14 +631,32 @@ export class AutomationDatabase {
       });
     });
 
+    const destinations = this.db.prepare(
+      'SELECT * FROM destinations WHERE campaign_id = ? ORDER BY position, id',
+    ).all(sourceId) as any[];
+    const destinationIdMap = new Map<number, number>();
+    destinations.forEach((row) => {
+      const copy = this.saveDestination({
+        campaignId: newId,
+        name: String(row.name),
+        weight: Number(row.weight),
+        isEnabled: Boolean(row.is_enabled),
+      });
+      destinationIdMap.set(Number(row.id), copy.id);
+    });
+
     const links = this.db.prepare(
       'SELECT * FROM campaign_links WHERE campaign_id = ? ORDER BY position, id',
     ).all(sourceId) as any[];
     links.forEach((row) => {
+      const sourceDestinationId = row.destination_id !== null && row.destination_id !== undefined
+        ? Number(row.destination_id) : undefined;
       this.saveCampaignLink({
         campaignId: newId,
         url: String(row.url),
         isEnabled: Boolean(row.is_enabled),
+        destinationId: sourceDestinationId !== undefined
+          ? destinationIdMap.get(sourceDestinationId) : undefined,
       });
     });
 
@@ -701,6 +751,45 @@ export class AutomationDatabase {
     }
   }
 
+  // One-time per campaign: groups pre-destination links into destinations so
+  // the user starts organized. Links with a resolved title are grouped by it
+  // (each real group becomes a destination); the rest land in "Destino inicial"
+  migrateDestinations() {
+    const campaigns = this.db.prepare(
+      'SELECT id FROM campaigns WHERE destinations_migrated = 0',
+    ).all() as any[];
+
+    for (const campaign of campaigns) {
+      const campaignId = Number(campaign.id);
+      const links = this.db.prepare(`
+        SELECT id, resolved_title FROM campaign_links
+        WHERE campaign_id = ? AND destination_id IS NULL
+        ORDER BY position, id
+      `).all(campaignId) as any[];
+
+      const linkIdsByTitle = new Map<string, number[]>();
+      for (const link of links) {
+        const key = link.resolved_title ? String(link.resolved_title) : '';
+        const bucket = linkIdsByTitle.get(key);
+        if (bucket) bucket.push(Number(link.id));
+        else linkIdsByTitle.set(key, [Number(link.id)]);
+      }
+
+      for (const [title, linkIds] of linkIdsByTitle) {
+        const destination = this.saveDestination({
+          campaignId,
+          name: title || 'Destino inicial',
+        });
+        const update = this.db.prepare(
+          'UPDATE campaign_links SET destination_id = ? WHERE id = ?',
+        );
+        linkIds.forEach((linkId) => update.run(destination.id, linkId));
+      }
+
+      this.db.prepare('UPDATE campaigns SET destinations_migrated = 1 WHERE id = ?').run(campaignId);
+    }
+  }
+
   private getOrCreateActiveCampaignId(): number {
     const active = this.db.prepare(
       'SELECT id FROM campaigns WHERE is_active = 1 ORDER BY id LIMIT 1',
@@ -738,6 +827,17 @@ export class AutomationDatabase {
     };
   }
 
+  private mapDestinationRow(row: any): CampaignDestinationRecord {
+    return {
+      id: Number(row.id),
+      name: String(row.name),
+      weight: Number(row.weight),
+      isEnabled: Boolean(row.is_enabled),
+      position: Number(row.position),
+      updatedAt: Number(row.updated_at),
+    };
+  }
+
   private mapLinkRow(row: any): CampaignLinkRecord {
     return {
       id: Number(row.id),
@@ -745,6 +845,8 @@ export class AutomationDatabase {
       isEnabled: Boolean(row.is_enabled),
       position: Number(row.position),
       updatedAt: Number(row.updated_at),
+      destinationId: row.destination_id !== null && row.destination_id !== undefined
+        ? Number(row.destination_id) : undefined,
       resolvedTitle: row.resolved_title ? String(row.resolved_title) : undefined,
       resolvedMembers: row.resolved_members !== null && row.resolved_members !== undefined
         ? Number(row.resolved_members) : undefined,
@@ -766,6 +868,10 @@ export class AutomationDatabase {
       'SELECT * FROM campaign_templates WHERE campaign_id = ? ORDER BY position, id',
     ).all(campaignId) as any[]).map((row) => this.mapTemplateRow(row));
 
+    const destinations = (this.db.prepare(
+      'SELECT * FROM destinations WHERE campaign_id = ? ORDER BY position, id',
+    ).all(campaignId) as any[]).map((row) => this.mapDestinationRow(row));
+
     const allLinks = (this.db.prepare(
       'SELECT * FROM campaign_links WHERE campaign_id = ? ORDER BY position, id',
     ).all(campaignId) as any[]).map((row) => this.mapLinkRow(row));
@@ -777,6 +883,7 @@ export class AutomationDatabase {
       name: String(campaignRow.name),
       spintaxTemplate: firstTemplate?.content ?? '',
       templates,
+      destinations,
       links: allLinks.filter((l) => l.isEnabled).map((l) => l.url),
       allLinks,
       updatedAt: Number(campaignRow.updated_at),
@@ -838,10 +945,89 @@ export class AutomationDatabase {
     this.db.prepare('DELETE FROM campaign_templates WHERE id = ?').run(id);
   }
 
-  saveCampaignLink(link: { id?: number; campaignId: number; url: string; isEnabled?: boolean }): CampaignLinkRecord {
+  saveDestination(destination: {
+    id?: number;
+    campaignId: number;
+    name?: string;
+    weight?: number;
+    isEnabled?: boolean;
+  }): CampaignDestinationRecord {
+    const now = Math.floor(Date.now() / 1000);
+
+    if (destination.id) {
+      this.db.prepare(`
+        UPDATE destinations SET
+          name = coalesce(?, name),
+          weight = ?,
+          is_enabled = ?,
+          updated_at = ?
+        WHERE id = ?
+      `).run(
+        destination.name ?? null,
+        Math.max(1, Number(destination.weight ?? 1)),
+        destination.isEnabled === false ? 0 : 1,
+        now,
+        destination.id,
+      );
+      this.touchCampaign(destination.campaignId);
+    } else {
+      const posRow = this.db.prepare(
+        'SELECT COALESCE(MAX(position), -1) + 1 AS next FROM destinations WHERE campaign_id = ?',
+      ).get(destination.campaignId) as any;
+      this.db.prepare(`
+        INSERT INTO destinations (campaign_id, name, weight, is_enabled, position, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        destination.campaignId,
+        destination.name || 'Destino',
+        Math.max(1, Number(destination.weight ?? 1)),
+        destination.isEnabled === false ? 0 : 1,
+        Number(posRow.next),
+        now,
+        now,
+      );
+      this.touchCampaign(destination.campaignId);
+    }
+
+    const row = destination.id
+      ? this.db.prepare('SELECT * FROM destinations WHERE id = ?').get(destination.id)
+      : this.db.prepare(
+        'SELECT * FROM destinations WHERE campaign_id = ? ORDER BY id DESC LIMIT 1',
+      ).get(destination.campaignId);
+    return this.mapDestinationRow(row);
+  }
+
+  deleteCampaignDestination(id: number) {
+    this.db.prepare('UPDATE campaign_links SET destination_id = NULL WHERE destination_id = ?').run(id);
+    this.db.prepare('DELETE FROM destinations WHERE id = ?').run(id);
+  }
+
+  // Enables exactly one destination ("promote only this group now")
+  focusDestination(id: number): boolean {
+    const row = this.db.prepare('SELECT campaign_id FROM destinations WHERE id = ?').get(id) as any;
+    if (!row) return false;
+
+    this.db.prepare(`
+      UPDATE destinations SET
+        is_enabled = CASE WHEN id = ? THEN 1 ELSE 0 END,
+        updated_at = ?
+      WHERE campaign_id = ?
+    `).run(id, Math.floor(Date.now() / 1000), Number(row.campaign_id));
+    this.touchCampaign(Number(row.campaign_id));
+    return true;
+  }
+
+  saveCampaignLink(link: {
+    id?: number;
+    campaignId: number;
+    url: string;
+    isEnabled?: boolean;
+    destinationId?: number;
+  }): CampaignLinkRecord {
     const now = Math.floor(Date.now() / 1000);
 
     if (link.id) {
+      // Assignment is preserved on plain toggles (destinationId only set on insert)
       this.db.prepare(`
         UPDATE campaign_links SET url = ?, is_enabled = ?, updated_at = ? WHERE id = ?
       `).run(link.url, link.isEnabled === false ? 0 : 1, now, link.id);
@@ -851,9 +1037,16 @@ export class AutomationDatabase {
         'SELECT COALESCE(MAX(position), -1) + 1 AS next FROM campaign_links WHERE campaign_id = ?',
       ).get(link.campaignId) as any;
       this.db.prepare(`
-        INSERT INTO campaign_links (campaign_id, url, is_enabled, position, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(link.campaignId, link.url, link.isEnabled === false ? 0 : 1, Number(posRow.next), now);
+        INSERT INTO campaign_links (campaign_id, url, is_enabled, position, updated_at, destination_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        link.campaignId,
+        link.url,
+        link.isEnabled === false ? 0 : 1,
+        Number(posRow.next),
+        now,
+        link.destinationId ?? null,
+      );
       this.touchCampaign(link.campaignId);
     }
 
@@ -947,16 +1140,39 @@ export class AutomationDatabase {
     }));
   }
 
-  // Full content replace — used to sync a worker with the master's campaign
+  // Full content replace — used to sync a worker with the master's campaign.
+  // `destinations` omitted (undefined) preserves local destinations, so legacy
+  // callers only rewrite templates/links; when provided, it is the new truth
+  // and links reference destinations by index into that array.
   replaceCampaignContent(
     campaignId: number,
     templates: { title?: string; content: string; weight?: number; isEnabled?: boolean }[],
-    links: { url: string; isEnabled?: boolean }[],
+    links: { url: string; isEnabled?: boolean; destinationIndex?: number }[],
+    destinations?: { name: string; weight?: number; isEnabled?: boolean }[],
   ) {
+    let destinationIds: number[] = [];
+    if (destinations !== undefined) {
+      this.db.prepare('DELETE FROM destinations WHERE campaign_id = ?').run(campaignId);
+      destinationIds = destinations.map((destination) => this.saveDestination({
+        campaignId,
+        name: destination.name,
+        weight: destination.weight,
+        isEnabled: destination.isEnabled,
+      }).id);
+    }
+
     this.db.prepare('DELETE FROM campaign_templates WHERE campaign_id = ?').run(campaignId);
     this.db.prepare('DELETE FROM campaign_links WHERE campaign_id = ?').run(campaignId);
     templates.forEach((template) => this.saveCampaignTemplate({ campaignId, ...template }));
-    links.forEach((link) => this.saveCampaignLink({ campaignId, ...link }));
+    links.forEach((link) => {
+      this.saveCampaignLink({
+        campaignId,
+        url: link.url,
+        isEnabled: link.isEnabled,
+        destinationId: link.destinationIndex !== undefined
+          ? destinationIds[link.destinationIndex] : undefined,
+      });
+    });
   }
 
   // Legacy single-template save (kept for backward-compatible sync payloads)
@@ -1128,11 +1344,15 @@ export class AutomationDatabase {
 
   addLog(log: AutomationLogRecord) {
     this.db.prepare(`
-      INSERT INTO logs (created_at, template_id, chat_id, chat_title, message_snippet, link_used, status, details)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO logs (
+        created_at, template_id, destination_id, chat_id, chat_title,
+        message_snippet, link_used, status, details
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       log.createdAt,
       log.templateId ?? null,
+      log.destinationId ?? null,
       log.chatId,
       log.chatTitle,
       log.messageSnippet,
@@ -1149,6 +1369,8 @@ export class AutomationDatabase {
       createdAt: Number(row.created_at),
       templateId: row.template_id !== null && row.template_id !== undefined
         ? Number(row.template_id) : undefined,
+      destinationId: row.destination_id !== null && row.destination_id !== undefined
+        ? Number(row.destination_id) : undefined,
       chatId: String(row.chat_id),
       chatTitle: String(row.chat_title),
       messageSnippet: String(row.message_snippet),

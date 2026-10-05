@@ -61,9 +61,12 @@ Base path: `/api/v1/automation`
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `campaign` | Current spintax template + links. |
-| POST | `campaign` | `{ spintaxTemplate, links }` — validated before saving. |
+| GET | `campaign` | Current spintax template + destinations + links. |
+| POST | `campaign` | `{ spintaxTemplate, links }` — validated before saving (legacy). |
 | POST | `test-spintax` | `{ template, links }` → 5 rendered previews, nothing is sent. |
+| POST | `campaign/destinations` | `{ id?, name, weight?, isEnabled? }` — upsert a promotion destination. |
+| POST | `campaign/destinations/focus` | `{ id }` — enable only this destination. |
+| DELETE | `campaign/destinations/{id}` | Delete a destination (its links become loose). |
 
 ### Group rotation
 
@@ -225,20 +228,52 @@ environment:
 ### Campaign CRUD (multiple templates + per-link toggles)
 
 - `GET campaign` — returns the active campaign as `{ id, name, spintaxTemplate,
-  templates[], links[], allLinks[], updatedAt }`. `templates[]` items:
-  `{ id, title, content, weight, isEnabled, position }`; `allLinks[]`:
-  `{ id, url, isEnabled, position }`; `links` = urls of enabled links.
+  templates[], destinations[], links[], allLinks[], updatedAt }`. `templates[]` items:
+  `{ id, title, content, weight, isEnabled, position }`; `destinations[]`:
+  `{ id, name, weight, isEnabled, position }`; `allLinks[]`:
+  `{ id, url, isEnabled, position, destinationId? }`; `links` = urls of enabled links.
 - `POST campaign/templates` body `{ id?, title?, content, weight?, isEnabled? }`
   — upserts a template of the active campaign (spintax validated, weight
   clamped to ≥ 1). `id` omitted = create.
 - `DELETE campaign/templates/{id}`
-- `POST campaign/links` body `{ id?, url, isEnabled? }`
+- `POST campaign/links` body `{ id?, url, isEnabled?, destinationId? }` —
+  `destinationId` (must belong to the active campaign) only applies on create;
+  toggles keep the assignment.
 - `DELETE campaign/links/{id}`
 - `POST campaign` (legacy) body `{ spintaxTemplate, links }` — replaces the
-  whole active campaign content with a single template; kept for old clients.
+  whole active campaign content with a single template (destinations are
+  preserved, links come back unassigned); kept for old clients.
 - Config flag `templateRotationEnabled` (`POST config`): when true the
   scheduler picks a random enabled template weighted by `weight` per send;
   when false (default) it always uses the first enabled template.
+
+### Promotion destinations (multi-group interleaving)
+
+Destinations group the invite links that point to the same promoted group, so
+one campaign can interleave several groups per send instead of rotating a flat
+link list.
+
+- `POST campaign/destinations` body `{ id?, name, weight?, isEnabled? }` —
+  upserts a destination of the active campaign (name required on create,
+  weight clamped to ≥ 1). `id` omitted = create.
+- `DELETE campaign/destinations/{id}` — deletes the destination; its links
+  survive as loose (`destinationId: null`).
+- `POST campaign/destinations/focus` body `{ id }` — enables exactly `id` and
+  disables every other destination of the campaign atomically
+  ("promote only this group now"). Returns `{ success, campaign }`.
+- Send-time behavior: each send picks one **enabled** destination weighted by
+  `weight` (weight 4 vs 1 ≈ 80/20 split), then one of its enabled links fills
+  `{LINK}`. Loose links are only used while no enabled destination has
+  enabled links, so a focused destination never leaks other groups' links.
+  Selection lives entirely in the destination toggle — no mode switch, and
+  nothing changes about the send-folder groups themselves: only the link inside
+  the message varies.
+- One-time migration: on the first boot after the upgrade, existing links with
+  a resolved title are grouped into destinations named after that title; the
+  rest land in a `Destino inicial` destination (per campaign, runs once).
+- Orchestrator sync: the master heartbeat now ships `destinations[]` and
+  link→destination references **by index**; workers map them to their own
+  local ids. Workers on older images ignore the extra fields.
 
 ### Campaign live-testing, link health and member tracking
 
@@ -265,8 +300,9 @@ environment:
 - `GET campaigns` — list `{ id, name, isActive, updatedAt }`.
 - `POST campaign/create` body `{ name? }` — creates an inactive empty
   campaign (default name `Campanha N`).
-- `POST campaign/duplicate` body `{ id, name? }` — deep-copies templates and
-  links of `id` into a new inactive campaign.
+- `POST campaign/duplicate` body `{ id, name? }` — deep-copies templates,
+  destinations and links of `id` into a new inactive campaign (link→destination
+  mapping is remapped to the copy's own ids).
 - `POST campaign/rename` body `{ id, name }`.
 - `POST campaign/activate` body `{ id }` — single active campaign invariant;
   the scheduler picks the new content on the next send (no restart needed).
