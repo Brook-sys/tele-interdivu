@@ -106,7 +106,7 @@ export interface AutomationGroupState {
   slowmodeSeconds: number;
   slowmodeNextSendDate?: number;
   starsCost?: number;
-  status: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' | 'STARS' | 'SENT';
+  status: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_RESEND' | 'WAITING_MESSAGES' | 'BLOCKED' | 'STARS' | 'SENT';
   lastError?: string;
   updatedAt: number;
 }

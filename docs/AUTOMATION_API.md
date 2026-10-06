@@ -48,7 +48,7 @@ Base path: `/api/v1/automation`
 | POST | `release` | – | Stops the automation immediately and releases the Telegram session back to the browser. |
 
 `targetChats` entry: `{ id, title, accessHash, slowmodeSeconds?, slowmodeNextSendDate?, lastSentAt?, starsCost?, status? }`.
-`status` may be `READY`, `WAITING_SLOWMODE`, `WAITING_MESSAGES`, `BLOCKED`, `STARS` — the daemon quarantines `STARS`/`BLOCKED` and re-probes them automatically every 30 min.
+`status` may be `READY`, `WAITING_SLOWMODE`, `WAITING_RESEND`, `WAITING_MESSAGES`, `BLOCKED`, `STARS` — the daemon quarantines `STARS`/`BLOCKED` and re-probes them automatically every 30 min. The probe is read-only and verifies actual membership (`channels.getParticipant` for supergroups, participant list for basic groups), so per-user bans stay quarantined instead of being reintegrated into failed sends.
 
 ### Configuration
 

@@ -189,6 +189,9 @@ const PromoPanel = ({
               <span className={styles.sectionTitle}>{lang(CATEGORY_LANG_KEYS[categoryId])}</span>
               <span className={styles.sectionCount}>{chatIds.length}</span>
             </div>
+            {categoryId === 'free' && chatIds.length > 0 && (
+              <div className={styles.sectionHint}>{lang('PromoFreeSectionHint')}</div>
+            )}
             {chatIds.length ? chatIds.map((chatId) => (
               <PromoChatRow
                 key={chatId}

@@ -1968,6 +1968,7 @@ const PromoAutomation = ({
                 styles.queueBadge,
                 g.status === 'READY' && styles.queueReady,
                 g.status === 'WAITING_SLOWMODE' && styles.queueSlow,
+                g.status === 'WAITING_RESEND' && styles.queueSlow,
                 g.status === 'WAITING_MESSAGES' && styles.queueWait,
                 g.status === 'BLOCKED' && styles.queueBlocked,
                 g.status === 'STARS' && styles.queueBlocked,

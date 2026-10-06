@@ -3141,6 +3141,7 @@
 "PromoPanelTitle" = "Divulgação";
 "PromoMenuManage" = "Gerenciar Grupos";
 "PromoCategoryFree" = "Livre para enviar";
+"PromoFreeSectionHint" = "Sem slowmode nem cobrança de estrelas. A automação aplica regras extras: exige mensagens de terceiros desde o último envio e respeita um intervalo mínimo de reenvio, então um grupo aqui pode não ser elegível ainda.";
 "PromoCategorySlowmode" = "Com slowmode ativo";
 "PromoCategoryStars" = "Cobra Estrelas";
 "PromoEmptySection" = "Nenhum grupo nesta seção";

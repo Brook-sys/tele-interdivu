@@ -109,10 +109,35 @@ export function parseCampaignLinkTarget(
   return undefined;
 }
 
+// Full-info flags do not reflect per-user bans: a kicked account still
+// resolves public supergroups without `left` or `bannedRights`, so
+// channels.getParticipant is the authoritative read-only write check.
+// Without it, revalidation keeps reintegrating banned groups and every
+// cycle burns a real send attempt that fails with USER_BANNED_IN_CHANNEL.
+export function getChannelParticipantCanWrite(participant: any): boolean {
+  if (!participant) return false;
+
+  if (participant.className === 'ChannelParticipantBanned') {
+    return participant.kicked !== true && participant.bannedRights?.sendMessages !== true;
+  }
+
+  return participant.className !== 'ChannelParticipantLeft';
+}
+
+// Permanent failures mean the account definitively cannot post there
+// (kicked, banned, group gone); anything else (flood, timeout) is transient
+// and must leave the current quarantine untouched
+export function getIsPermanentParticipantError(message: string): boolean {
+  return /USER_NOT_PARTICIPANT|USER_BANNED_IN_CHANNEL|CHANNEL_PRIVATE|CHAT_WRITE_FORBIDDEN/
+    .test(message) || /CHAT_RESTRICTED|USER_DEACTIVATED_BAN/.test(message);
+}
+
 export class TelegramRunner {
   private client?: TelegramClient;
 
   private targetChatMap = new Map<string, TargetChatInfo>();
+
+  private selfUserId?: string;
 
   private lastUpdateReceivedAt?: number;
 
@@ -154,6 +179,7 @@ export class TelegramRunner {
 
     this.targetChatMap.clear();
     this.historyCheckCache.clear();
+    this.selfUserId = undefined;
     targetChats.forEach((chat) => {
       this.targetChatMap.set(chat.id, chat);
     });
@@ -382,12 +408,36 @@ export class TelegramRunner {
         // writing, or the group is locked for non-admins)
         const channelObj = (result?.chats || []).find((chat: any) => chat?.className === 'Channel')
           || (result?.chats || [])[0];
-        const cannotWrite = Boolean(channelObj?.left)
+        const cannotWriteFromFlags = Boolean(channelObj?.left)
           || channelObj?.bannedRights?.sendMessages === true
           || channelObj?.defaultBannedRights?.sendMessages === true;
 
+        let canWrite = !cannotWriteFromFlags;
+        if (canWrite) {
+          try {
+            const participantResult = await this.client.invoke(
+              new GramJs.channels.GetParticipant({
+                channel,
+                participant: new GramJs.InputPeerSelf(),
+              }),
+            ) as any;
+            canWrite = getChannelParticipantCanWrite(participantResult?.participant);
+          } catch (participantErr: any) {
+            const participantMessage = String(
+              participantErr?.errorMessage || participantErr?.message || participantErr,
+            );
+            if (getIsPermanentParticipantError(participantMessage)) {
+              canWrite = false;
+            } else {
+              // Transient failure: report nothing so the scheduler keeps the
+              // current quarantine and retries on the next sweep
+              return undefined;
+            }
+          }
+        }
+
         return {
-          canWrite: !cannotWrite,
+          canWrite,
           starsCost: Number(fullChat?.sendPaidMessagesStars || 0),
           slowmodeSeconds: Number(fullChat?.slowmodeSeconds || 0),
         };
@@ -397,8 +447,17 @@ export class TelegramRunner {
         chatId: -BigInt(chatId),
       })) as any;
 
+      // GetFullChat ships the member list, so self membership is a
+      // reliable write check for basic groups (kicked accounts are absent)
+      const selfUserId = await this.fetchSelfUserId();
+      if (!selfUserId) return undefined;
+
+      const participants = result?.fullChat?.participants?.participants;
+      const canWrite = !Array.isArray(participants)
+        || participants.some((p: any) => String(p?.userId) === selfUserId);
+
       return {
-        canWrite: true,
+        canWrite,
         starsCost: 0,
         slowmodeSeconds: Number(result?.fullChat?.slowmodeSeconds || 0),
       };
@@ -410,6 +469,26 @@ export class TelegramRunner {
         return { canWrite: false };
       }
 
+      return undefined;
+    }
+  }
+
+  // Resolves our own user id once per session so basic-group probes can
+  // check membership against the participant list
+  private async fetchSelfUserId(): Promise<string | undefined> {
+    if (this.selfUserId) return this.selfUserId;
+    if (!this.client || !this.client.isConnected()) return undefined;
+
+    try {
+      const result = await this.client.invoke(
+        new GramJs.users.GetUsers({ id: [new GramJs.InputUserSelf()] }),
+      ) as any;
+      const selfId = result?.[0]?.id !== undefined ? String(result[0].id) : undefined;
+      if (selfId) {
+        this.selfUserId = selfId;
+      }
+      return selfId;
+    } catch {
       return undefined;
     }
   }

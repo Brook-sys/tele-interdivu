@@ -127,6 +127,22 @@ export function evaluateGroupEligibility(
   return { isEligible: true, reason: 'READY' };
 }
 
+// Human-readable reason for a cycle with no eligible group. The cooldown
+// alone hides the full picture: when other groups are stuck on the
+// other-messages rule, saying "waiting for one group's cooldown" reads as
+// a scheduler stall while the count of ready groups sits at zero
+export function buildCooldownWaitReason(
+  nextGroupTitle: string,
+  nextWaitSeconds: number,
+  waitingMessagesCount: number,
+  minOtherMessages: number,
+): string {
+  const base = `Aguardando cooldown de ${nextGroupTitle} (~${Math.max(0, Math.round(nextWaitSeconds))}s)`;
+  return waitingMessagesCount > 0
+    ? `${base} · ${waitingMessagesCount} grupo(s) aguardando ${minOtherMessages}+ mensagens de terceiros`
+    : base;
+}
+
 interface SendResult {
   success: boolean;
   isPaymentRequired?: boolean;
@@ -712,15 +728,20 @@ export class AutomationScheduler {
         if (!eligibleGroup) {
           // No groups currently satisfy all criteria
           if (countWaitingSlowmode > 0) {
+            const cooldownReason = buildCooldownWaitReason(
+              slowestGroupTitle,
+              minSlowmodeWaitSeconds,
+              countWaitingMessages,
+              config.minOtherMessages,
+            );
             this.logWaitTransitionOnce(
               'COOLDOWN',
-              `Nenhum grupo elegível. Aguardando cooldown — próximo disponível: `
-              + `${slowestGroupTitle} em ~${Math.round(minSlowmodeWaitSeconds)}s.`,
+              `Nenhum grupo elegível. ${cooldownReason}.`,
               serverNow,
             );
             this.state.status = 'WAITING_COOLDOWN';
             this.state.currentChatTitle = slowestGroupTitle;
-            this.state.waitingReason = `Aguardando cooldown de ${slowestGroupTitle}`;
+            this.state.waitingReason = cooldownReason;
             const waitMs = Math.min(Math.max(5, minSlowmodeWaitSeconds), 30) * 1000;
             await this.sleep(waitMs, signal);
             this.state.currentChatTitle = undefined;

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AutomationScheduler,
+  buildCooldownWaitReason,
   calculateJitterDelayMs,
   evaluateGroupEligibility,
   getSleepWindowEndMs,
@@ -33,6 +34,23 @@ describe('calculateJitterDelayMs', () => {
       expect(ms).toBeGreaterThanOrEqual(10_000);
       expect(ms).toBeLessThanOrEqual(20_000);
     }
+  });
+});
+
+describe('buildCooldownWaitReason', () => {
+  it('mentions the next group and its cooldown estimate', () => {
+    expect(buildCooldownWaitReason('Grupo X', 120, 0, 12))
+      .toBe('Aguardando cooldown de Grupo X (~120s)');
+  });
+
+  it('discloses groups still blocked by the other-messages rule', () => {
+    expect(buildCooldownWaitReason('Grupo X', 45, 3, 12))
+      .toBe('Aguardando cooldown de Grupo X (~45s) · 3 grupo(s) aguardando 12+ mensagens de terceiros');
+  });
+
+  it('never reports negative countdowns', () => {
+    expect(buildCooldownWaitReason('Grupo X', -10, 0, 12))
+      .toBe('Aguardando cooldown de Grupo X (~0s)');
   });
 });
 

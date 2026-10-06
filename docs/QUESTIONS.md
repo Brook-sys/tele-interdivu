@@ -484,3 +484,33 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     de cada card, grupo "Avulsos", select de destino ao adicionar link e
     prévia sorteando o mesmo pool do envio real (de passagem corrigiu o
     reroll da prévia, que não re-sortava com rotação desligada).
+
+64. **Loop infinito de reintegração de grupos banidos — probe cego a
+    banimento por usuário** — O `probeChat` julgava "canWrite" só pelos
+    flags do `GetFullChannel` (`left`/`bannedRights`/`defaultBannedRights`),
+    que não refletem banimento por usuário: conta expulsa/banida de grupo
+    público continua resolvendo o full info sem `left` nem `bannedRights`,
+    e para grupos básicos o probe retornava `canWrite: true`
+    incondicional. Resultado: a revalidação (30 min) reintegrava grupos
+    banidos, o sort por `lastSentAt` mais antigo os colocava na cabeça da
+    fila, o envio real falhava com `USER_BANNED_IN_CHANNEL` e
+    re-quarentenava — 30 min depois o sweep reintegrava de novo. Evidência
+    ao vivo: 11 grupos com 2–3 erros cada em rajadas separadas por
+    exatamente 30 min (28 `SendMessage` desperdiçados em ~2h contra contas
+    banidas). Corrigido: o probe pergunta à Telegram via
+    `channels.getParticipant(channel, InputPeerSelf)` (read-only) —
+    participante `ChannelParticipantBanned` com `kicked` ou
+    `bannedRights.sendMessages`, ou `ChannelParticipantLeft`, mantém
+    quarentena; erros permanentes (`USER_NOT_PARTICIPANT` etc.) idem;
+    transitórios (flood/timeout) devolvem `undefined` e o scheduler
+    tenta no próximo ciclo. Grupos básicos: presença do próprio id na
+    lista de participantes do `GetFullChat`. De passagem: (1) o motivo de
+    espera agora agrega — "Aguardando cooldown de X (~Ns) · N grupo(s)
+    aguardando 12+ mensagens de terceiros" — antes dizia só "Aguardando
+    cooldown de {grupo}" mesmo quando a maioria esperava mensagens,
+    mascarando por que o contador de prontos ficava em 0; (2)
+    `WAITING_RESEND` faltava na união de tipos do client e no badge da
+    aba Fila; (3) a seção "Livre para enviar" do painel Divulgação ganhou
+    um hint explicando que ela avalia só slowmode/estrelas (critério do
+    envio manual), enquanto a automação exige também mensagens de
+    terceiros desde o último envio e intervalo mínimo de reenvio.

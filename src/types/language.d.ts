@@ -2301,6 +2301,7 @@ export interface LangPair {
   'PromoPanelTitle': undefined;
   'PromoMenuManage': undefined;
   'PromoCategoryFree': undefined;
+  'PromoFreeSectionHint': undefined;
   'PromoCategorySlowmode': undefined;
   'PromoCategoryStars': undefined;
   'PromoEmptySection': undefined;

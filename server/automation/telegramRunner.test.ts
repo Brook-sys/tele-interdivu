@@ -1,6 +1,59 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractMessagesFromGramJsUpdate } from './telegramRunner';
+import {
+  extractMessagesFromGramJsUpdate,
+  getChannelParticipantCanWrite,
+  getIsPermanentParticipantError,
+} from './telegramRunner';
+
+describe('getChannelParticipantCanWrite', () => {
+  it('allows regular members, admins and creators', () => {
+    expect(getChannelParticipantCanWrite({ className: 'ChannelParticipantSelf' })).toBe(true);
+    expect(getChannelParticipantCanWrite({ className: 'ChannelParticipant' })).toBe(true);
+    expect(getChannelParticipantCanWrite({ className: 'ChannelParticipantAdmin' })).toBe(true);
+    expect(getChannelParticipantCanWrite({ className: 'ChannelParticipantCreator' })).toBe(true);
+  });
+
+  it('blocks kicked and write-banned participants', () => {
+    expect(getChannelParticipantCanWrite({
+      className: 'ChannelParticipantBanned',
+      kicked: true,
+    })).toBe(false);
+    expect(getChannelParticipantCanWrite({
+      className: 'ChannelParticipantBanned',
+      bannedRights: { sendMessages: true },
+    })).toBe(false);
+  });
+
+  it('allows participants banned from other actions only', () => {
+    expect(getChannelParticipantCanWrite({
+      className: 'ChannelParticipantBanned',
+      bannedRights: { sendMessages: false, sendPhotos: true },
+    })).toBe(true);
+  });
+
+  it('blocks left participants and missing payloads', () => {
+    expect(getChannelParticipantCanWrite({ className: 'ChannelParticipantLeft' })).toBe(false);
+    expect(getChannelParticipantCanWrite(undefined)).toBe(false);
+  });
+});
+
+describe('getIsPermanentParticipantError', () => {
+  it('classifies definitive access failures as permanent', () => {
+    expect(getIsPermanentParticipantError(
+      'RPCError 400: USER_NOT_PARTICIPANT (caused by channels.GetParticipant)',
+    )).toBe(true);
+    expect(getIsPermanentParticipantError(
+      'RPCError 400: USER_BANNED_IN_CHANNEL (caused by channels.GetParticipant)',
+    )).toBe(true);
+    expect(getIsPermanentParticipantError('RPCError 400: CHANNEL_PRIVATE')).toBe(true);
+  });
+
+  it('treats transport and flood failures as transient', () => {
+    expect(getIsPermanentParticipantError('RPCError 420: FLOOD_WAIT_30')).toBe(false);
+    expect(getIsPermanentParticipantError('TimeoutError: WebSocket closed')).toBe(false);
+  });
+});
 
 describe('extractMessagesFromGramJsUpdate', () => {
   it('handles null/undefined gracefully', () => {
