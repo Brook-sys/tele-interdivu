@@ -3,7 +3,7 @@ import {
 } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
-import { DEBUG_LOG_FILENAME } from '../../../config';
+import { DEBUG_LOG_FILENAME, IS_PROXY_ENABLED } from '../../../config';
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
 import {
   IS_SNAP_EFFECT_SUPPORTED,
@@ -146,13 +146,14 @@ const SettingsExperimental = ({
       <Island>
         <Checkbox
           label="Allow HTTP Transport"
-          checked={Boolean(shouldAllowHttpTransport)}
+          checked={Boolean(shouldAllowHttpTransport) && !IS_PROXY_ENABLED}
+          disabled={IS_PROXY_ENABLED}
           onCheck={() => setSharedSettingOption({ shouldAllowHttpTransport: !shouldAllowHttpTransport })}
         />
         <Checkbox
           label="Force HTTP Transport"
-          disabled={!shouldAllowHttpTransport}
-          checked={Boolean(shouldForceHttpTransport)}
+          disabled={!shouldAllowHttpTransport || IS_PROXY_ENABLED}
+          checked={Boolean(shouldForceHttpTransport) && !IS_PROXY_ENABLED}
           onCheck={() => setSharedSettingOption({ shouldForceHttpTransport: !shouldForceHttpTransport })}
         />
       </Island>

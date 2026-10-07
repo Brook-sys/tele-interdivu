@@ -7,8 +7,8 @@ import {
 import type { TwoFaParams } from '../../../lib/gramjs/client/2fa';
 import TelegramClient from '../../../lib/gramjs/client/TelegramClient';
 import { RPCError } from '../../../lib/gramjs/errors';
-import { setProxyRelayOrigin } from '../../../lib/gramjs/extensions/PromisedWebSockets';
 import { Logger as GramJsLogger } from '../../../lib/gramjs/extensions/index';
+import { setProxyRelayOrigin } from '../../../lib/gramjs/extensions/PromisedWebSockets';
 
 import type { ThreadId } from '../../../types';
 import type {
@@ -20,7 +20,7 @@ import type {
 
 import {
   APP_CODE_NAME,
-  DEBUG, DEBUG_GRAMJS, IS_TEST, LANG_PACK, TELEGRAM_API_HASH, TELEGRAM_API_ID, UPLOAD_WORKERS,
+  DEBUG, DEBUG_GRAMJS, IS_PROXY_ENABLED, IS_TEST, LANG_PACK, TELEGRAM_API_HASH, TELEGRAM_API_ID, UPLOAD_WORKERS,
 } from '../../../config';
 import { pause } from '../../../util/schedulers';
 import { buildWebPage } from '../apiBuilders/messageContent';
@@ -654,12 +654,15 @@ export async function repairWebPageMedia(url: string) {
   return webPage.webpageType === 'full';
 }
 
+// Fail-closed: with a proxy relay configured, the HTTP transport would bypass
+// the relay and expose the machine IP to the Telegram DC, so it stays off
+// regardless of experimental settings
 export function setForceHttpTransport(forceHttpTransport: boolean) {
-  client.setForceHttpTransport(forceHttpTransport);
+  client.setForceHttpTransport(IS_PROXY_ENABLED ? false : forceHttpTransport);
 }
 
 export function setAllowHttpTransport(allowHttpTransport: boolean) {
-  client.setAllowHttpTransport(allowHttpTransport);
+  client.setAllowHttpTransport(IS_PROXY_ENABLED ? false : allowHttpTransport);
 }
 
 export function setShouldDebugExportedSenders(value: boolean) {

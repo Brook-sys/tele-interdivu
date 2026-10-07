@@ -532,3 +532,24 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     valida o `PROXY_URL` no boot (`getProxyUrlFormatError`) e loga na
     hora o problema e o formato esperado, em vez de deixar o operador
     descobrir por dezenas de milhares de retries silenciosos.
+
+66. **Fail-closed incompleto no navegador — fallback de transporte HTTP
+    podia furar o proxy e vazar o IP da máquina** — O relay em si era
+    fail-closed (com `proxyRelayOrigin` setado, o websocket só aponta
+    para `/apiws_proxy`, sem fallback direto), mas o `MTProtoSender`
+    mantinha um plano B herdado do Telegram Web: após
+    `_retriesToFallback` falhas de ws, se `shouldAllowHttpTransport`
+    estivesse ligado (Configurações → Experimental), trocava para o
+    transporte HTTP — `fetch` **direto ao DC**, fora do relay e do
+    proxy. Ou seja: com o relay quebrado, um toggle experimental
+    "ressuscitava" a interface conectando direto do IP da máquina,
+    exatamente o vazamento que a política fail-closed promete impedir.
+    O daemon nunca teve esse fallback (por isso ficou preso nos ~49 mil
+    retries). Corrigido em três camadas, todas ligadas ao
+    `IS_PROXY_ENABLED` (o `config.js` injetado pelo entrypoint): (1) o
+    init passa `false` para `shouldAllowHttpTransport`/`shouldForceHttpTransport`;
+    (2) os setters em runtime (`setAllowHttpTransport`/
+    `setForceHttpTransport`) clampeiam para `false` — chokepoint por
+    onde toda mudança de settings passa; (3) os toggles da UI ficam
+    desabilitados com o proxy ativo. Com isso a promessa da doc é
+    verdadeira: sem relay, sem conexão — nunca direto.
