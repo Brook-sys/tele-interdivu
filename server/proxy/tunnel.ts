@@ -18,6 +18,25 @@ export function formatHostPort(host: string, port: number): string {
   return net.isIPv6(bare) ? `[${bare}]:${port}` : `${host}:${port}`;
 }
 
+// Returns a human-readable problem with a proxy URL so misconfiguration
+// surfaces at boot. Returns `undefined` when the value is usable. Credentials
+// belong before the host (`http://user:pass@host:port`); anything else fails
+// URL parsing and would otherwise surface only as endless relay retries
+export function getProxyUrlFormatError(proxyUrl?: string): string | undefined {
+  if (!proxyUrl) return undefined;
+
+  try {
+    const parsed = new URL(proxyUrl);
+    const protocol = parsed.protocol.toLowerCase();
+    if (protocol !== 'http:' && protocol !== 'https:' && protocol !== 'socks5:' && protocol !== 'socks5h:') {
+      return `unsupported protocol "${protocol}" — supported: http://, https://, socks5://, socks5h://`;
+    }
+    return undefined;
+  } catch {
+    return 'invalid URL — credentials must come before the host, e.g. http://user:pass@host:port';
+  }
+}
+
 // Parses an IPv6 literal into 16 bytes (expands "::" shorthand)
 function ipv6ToBuffer(host: string): Buffer {
   const bare = host.replace(/^\[|\]$/g, '');

@@ -514,3 +514,21 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     um hint explicando que ela avalia só slowmode/estrelas (critério do
     envio manual), enquanto a automação exige também mensagens de
     terceiros desde o último envio e intervalo mínimo de reenvio.
+
+65. **`telegram-promo2` nunca conectava — `PROXY_URL2` com credenciais
+    invertidas** — O valor na stack era `http://ip:porta@usuario:senha`;
+    `new URL()` rejeita esse formato ("Invalid URL": a porta viraria o
+    que vier depois da arroba), e como 100% do tráfego MTProto do daemon
+    passa pelo relay Fail-Closed, nenhuma conexão ao Telegram era
+    possível: o runner ficou em loop de retry às cegas (~49 mil
+    tentativas em 14h) e o takeover nunca completava — do lado da UI,
+    "inicia e não vai". O código já suportava proxy autenticado (HTTP
+    CONNECT com `Proxy-Authorization: Basic` e SOCKS5 user/pass); o erro
+    era só de configuração. Corrigido o valor na stack do Portainer
+    (credenciais antes do host), recriando apenas o `telegram-promo2`
+    (container 1 intocado, mesma imagem); validação de ponta a ponta:
+    upgrade websocket em `/apiws_proxy` na porta 8091 retorna
+    `101 Switching Protocols` através do proxy. Hardening: o daemon
+    valida o `PROXY_URL` no boot (`getProxyUrlFormatError`) e loga na
+    hora o problema e o formato esperado, em vez de deixar o operador
+    descobrir por dezenas de milhares de retries silenciosos.

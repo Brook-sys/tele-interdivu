@@ -9,12 +9,21 @@ import { TelegramRunner } from './automation/telegramRunner';
 import { AutomationDatabase } from './db/database';
 import { OrchestratorCoordinator } from './orchestrator/coordinator';
 import { OrchestratorWorkerClient } from './orchestrator/workerClient';
+import { getProxyUrlFormatError } from './proxy/tunnel';
 import { handleWsRelay } from './proxy/wsRelay';
 
 const PORT = Number(process.env.AUTOMATION_PORT) || 3000;
 const PROXY_URL = process.env.PROXY_URL;
 const NODE_ROLE = process.env.NODE_ROLE || 'worker';
 const WORKER_ID = process.env.WORKER_ID || process.env.HOSTNAME || 'master';
+
+const proxyUrlError = getProxyUrlFormatError(PROXY_URL);
+if (proxyUrlError) {
+  // eslint-disable-next-line no-console
+  console.error(`[Interdivu Proxy] PROXY_URL is unusable: ${proxyUrlError}`);
+  // eslint-disable-next-line no-console
+  console.error('[Interdivu Proxy] Every MTProto connection routes through it — fix before starting the automation');
+}
 
 const db = new AutomationDatabase();
 const runner = new TelegramRunner(db, PORT);

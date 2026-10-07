@@ -1,7 +1,29 @@
 import net from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { createProxiedConnection, formatHostPort } from './tunnel';
+import { createProxiedConnection, formatHostPort, getProxyUrlFormatError } from './tunnel';
+
+describe('getProxyUrlFormatError', () => {
+  it('accepts valid URLs with credentials before the host', () => {
+    expect(getProxyUrlFormatError('http://user:pass@1.2.3.4:8080')).toBeUndefined();
+    expect(getProxyUrlFormatError('https://proxy.example.com:8443')).toBeUndefined();
+    expect(getProxyUrlFormatError('socks5://user:pass@proxy.example.com:1080')).toBeUndefined();
+    expect(getProxyUrlFormatError('socks5://[::1]:1080')).toBeUndefined();
+  });
+
+  it('rejects inverted credentials with a hint about the expected order', () => {
+    expect(getProxyUrlFormatError('http://1.2.3.4:8080@user:pass'))
+      .toMatch(/credentials must come before the host/);
+  });
+
+  it('rejects unsupported protocols', () => {
+    expect(getProxyUrlFormatError('ftp://user:pass@1.2.3.4:21')).toMatch(/unsupported protocol/);
+  });
+
+  it('treats an unset proxy as valid', () => {
+    expect(getProxyUrlFormatError(undefined)).toBeUndefined();
+  });
+});
 
 describe('createProxiedConnection', () => {
   let echoServer: net.Server;
