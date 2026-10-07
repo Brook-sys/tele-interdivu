@@ -603,3 +603,27 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     heartbeat/claim/report. Testes: self-registro, não-aplicação do
     desired-state no master, aplicação da fatia no worker real,
     rebalance 4/3, e claim grantable pelo self (268/268).
+
+69. **Campaign-sync do worker nunca funcionou — crash silencioso a cada
+    heartbeat (`Cannot read properties of undefined (reading 'id')`)** —
+    Descoberto pelos logs de transição novos do fix 68: o container 2
+    flapava degradado↔saudável a cada tick de 15s. Causa: o master montava
+    o `desiredCampaign.templates` com os **registros completos**
+    (`campaign.templates`, incluindo os `id`s locais do master), violando
+    o contrato content-only já declarado na interface do workerClient. No
+    worker, `replaceCampaignContent` faz `saveCampaignTemplate({campaignId,
+    ...template})` — com `id` presente, caía no caminho de UPDATE com o id
+    do MASTER, logo após deletar os templates locais: UPDATE não acha
+    linha, `SELECT ... WHERE id = ?` volta `undefined` e `mapTemplateRow`
+    explode. Determinístico em qualquer worker cujo master tivesse
+    templates — ou seja, o sync de campanha nunca funcionou em produção;
+    antes dos logs a exceção era engolida e o worker vivia "degradado".
+    Correção nos dois lados: (a) master projeta templates content-only
+    (`title/content/weight/isEnabled`), igual já fazia com `allLinks` e
+    `destinations` — o que inclusive conserta workers em imagens antigas;
+    (b) worker normaliza o payload antes de aplicar, por defesa contra
+    masters antigos. Teste de regressão com o cenário real (master com
+    template+destino+link, worker adotando o conteúdo e rebindando links
+    aos ids locais) + asserções de `isDegraded === false`. Validado ao
+    vivo: campanha da conta 2 agora é espelho exato da conta 1
+    (268/268).
