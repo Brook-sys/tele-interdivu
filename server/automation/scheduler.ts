@@ -66,6 +66,13 @@ export function getSleepWindowEndMs(startStr: string, endStr: string, now = new 
   return end.getTime();
 }
 
+// Round target for the active round: an orchestrated scheduler (master
+// self-registration) uses its rebalanced share instead of the global config
+// value, which stays untouched on the master
+export function resolveRoundTarget(configRoundTarget: number, orchestratedTarget?: number): number {
+  return Math.max(1, orchestratedTarget ?? configRoundTarget);
+}
+
 export function calculateJitterDelayMs(minSec: number, maxSec: number): number {
   const min = Math.max(1, minSec);
   const max = Math.max(min, maxSec);
@@ -186,6 +193,11 @@ export class AutomationScheduler {
     private readonly checkMessagesCallback?: CheckMessagesCallback,
     private readonly probeChatCallback?: ProbeChatCallback,
     private readonly orchestratorClient?: OrchestratorWorkerClient,
+    // Master self-registration: the coordinator splits the global round
+    // target across workers and stores each share in the worker record, so
+    // an orchestrated scheduler must use its share instead of the global
+    // config value (which stays untouched on the master)
+    private readonly getOrchestratedRoundTarget?: () => number | undefined,
   ) {}
 
   private lastRevalidateAt = 0;
@@ -579,8 +591,12 @@ export class AutomationScheduler {
           }
         }
 
-        // 4. Round target check: conclude round when the send goal is reached
-        const roundTarget = Math.max(1, config.roundTargetSends);
+        // 4. Round target check: conclude round when the send goal is reached.
+        // Orchestrated master self-registration uses the rebalanced share.
+        const roundTarget = resolveRoundTarget(
+          config.roundTargetSends,
+          this.orchestratorClient ? this.getOrchestratedRoundTarget?.() : undefined,
+        );
         if (this.state.sentInRoundCount >= roundTarget) {
           const snippet = `Rodada #${this.state.activeRound} concluída: meta de `
             + `${roundTarget} envios atingida.`;

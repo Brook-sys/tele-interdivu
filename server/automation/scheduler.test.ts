@@ -7,6 +7,7 @@ import {
   evaluateGroupEligibility,
   getSleepWindowEndMs,
   isInsideSleepWindow,
+  resolveRoundTarget,
 } from './scheduler';
 
 describe('isInsideSleepWindow', () => {
@@ -51,6 +52,20 @@ describe('buildCooldownWaitReason', () => {
   it('never reports negative countdowns', () => {
     expect(buildCooldownWaitReason('Grupo X', -10, 0, 12))
       .toBe('Aguardando cooldown de Grupo X (~0s)');
+  });
+});
+
+describe('resolveRoundTarget', () => {
+  it('uses the orchestrated share when one is available', () => {
+    expect(resolveRoundTarget(40, 20)).toBe(20);
+  });
+
+  it('falls back to the config target when orchestration has no share yet', () => {
+    expect(resolveRoundTarget(40, undefined)).toBe(40);
+  });
+
+  it('never allows a target below one', () => {
+    expect(resolveRoundTarget(0, 0)).toBe(1);
   });
 });
 

@@ -32,12 +32,18 @@ export class OrchestratorWorkerClient {
 
   private isDegraded = false;
 
+  private hasLoggedDegraded = false;
+
+  private hasLoggedRegistered = false;
+
   constructor(
     private readonly db: AutomationDatabase,
     private readonly masterUrl: string,
     private readonly workerId: string,
     private readonly workerApiUrl: string,
     private readonly token?: string,
+    private readonly shouldApplyDesiredState = true,
+    private readonly heartbeatIntervalMs = HEARTBEAT_INTERVAL_MS,
   ) {}
 
   static fromEnv(db: AutomationDatabase): OrchestratorWorkerClient | undefined {
@@ -61,12 +67,53 @@ export class OrchestratorWorkerClient {
     );
   }
 
+  // A master with no MASTER_URL of its own registers its own account as a
+  // worker through its local daemon API, so its sends are coordinated under
+  // the same global rules and it appears in the orchestration panel
+  static createSelf(
+    db: AutomationDatabase,
+    daemonUrl: string,
+    workerId: string,
+    workerApiUrl: string,
+    heartbeatIntervalMs = HEARTBEAT_INTERVAL_MS,
+  ): OrchestratorWorkerClient {
+    return new OrchestratorWorkerClient(
+      db,
+      daemonUrl.replace(/\/+$/, ''),
+      workerId,
+      (workerApiUrl || daemonUrl).replace(/\/+$/, ''),
+      process.env.ORCHESTRATOR_TOKEN || process.env.AUTOMATION_API_TOKEN,
+      false,
+      heartbeatIntervalMs,
+    );
+  }
+
   getWorkerId() {
     return this.workerId;
   }
 
   getIsDegraded() {
     return this.isDegraded;
+  }
+
+  // Logs only state transitions so a down master does not spam the log every
+  // heartbeat tick, while still surfacing the failure reason for debugging
+  private markHealthy() {
+    if (this.isDegraded) {
+      this.hasLoggedDegraded = false;
+      // eslint-disable-next-line no-console
+      console.log(`[Interdivu Orchestrator] Link with the master restored ('${this.workerId}' is healthy)`);
+    }
+    this.isDegraded = false;
+  }
+
+  private markDegraded(reason: string) {
+    if (!this.hasLoggedDegraded) {
+      this.hasLoggedDegraded = true;
+      // eslint-disable-next-line no-console
+      console.warn(`[Interdivu Orchestrator] ${reason} — running degraded (local-only) and retrying`);
+    }
+    this.isDegraded = true;
   }
 
   // Content-only projections so heartbeat syncs don't rewrite rows that
@@ -156,26 +203,34 @@ export class OrchestratorWorkerClient {
           status: getStatus(),
         }) as HeartbeatResponse;
 
-        this.isDegraded = false;
-        if (response.desiredConfig) {
-          this.db.updateConfig(response.desiredConfig);
+        this.markHealthy();
+        if (this.shouldApplyDesiredState) {
+          if (response.desiredConfig) {
+            this.db.updateConfig(response.desiredConfig);
+          }
+          if (response.desiredCampaign) {
+            this.applyDesiredCampaign(response.desiredCampaign);
+          }
         }
-        if (response.desiredCampaign) {
-          this.applyDesiredCampaign(response.desiredCampaign);
-        }
-      } catch {
-        // Degraded: keep working locally, keep retrying on the next ticks
-        this.isDegraded = true;
+      } catch (err: any) {
+        this.markDegraded(`heartbeat failed: ${err?.message || err}`);
       }
     };
 
     // Register immediately, then heartbeat on a fixed cadence
     const groups = this.db.getAllGroupStates().map((group) => group.chatId);
     this.post('register', { workerId: this.workerId, apiUrl: this.workerApiUrl, groups })
-      .then(() => { this.isDegraded = false; })
-      .catch(() => { this.isDegraded = true; })
+      .then(() => {
+        this.markHealthy();
+        if (!this.hasLoggedRegistered) {
+          this.hasLoggedRegistered = true;
+          // eslint-disable-next-line no-console
+          console.log(`[Interdivu Orchestrator] Registered as '${this.workerId}' with the master`);
+        }
+      })
+      .catch((err: any) => this.markDegraded(`register failed: ${err?.message || err}`))
       .finally(() => {
-        this.heartbeatTimer = setInterval(() => void tick(), HEARTBEAT_INTERVAL_MS);
+        this.heartbeatTimer = setInterval(() => void tick(), this.heartbeatIntervalMs);
         (this.heartbeatTimer as { unref?: () => void }).unref?.();
       });
   }
@@ -192,10 +247,10 @@ export class OrchestratorWorkerClient {
   async claimSendSlot(chatId: string, chatTitle: string): Promise<ClaimDecision | undefined> {
     try {
       const decision = await this.post('claim', { workerId: this.workerId, chatId, chatTitle }) as ClaimDecision;
-      this.isDegraded = false;
+      this.markHealthy();
       return decision;
-    } catch {
-      this.isDegraded = true;
+    } catch (err: any) {
+      this.markDegraded(`claim failed: ${err?.message || err}`);
       return undefined;
     }
   }
@@ -203,8 +258,8 @@ export class OrchestratorWorkerClient {
   async reportSendResult(chatId: string, result: OrchestratorSendResult) {
     try {
       await this.post('report', { workerId: this.workerId, chatId, result });
-    } catch {
-      this.isDegraded = true;
+    } catch (err: any) {
+      this.markDegraded(`report failed: ${err?.message || err}`);
     }
   }
 

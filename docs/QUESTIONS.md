@@ -577,3 +577,29 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     tracking aborta a passada ao encontrar flood. Nada de resolução
     automática nova: continua tudo no clique; o guard só garante que os
     cliques não viram rajada e que o castigo é honrado até o fim.
+
+68. **Orquestração 0/0 online — master configurado, mas ninguém (nem ele
+    próprio) se registrava** — Sintoma: com `NODE_ROLE=master` no container
+    1, o painel de Orquestração abria mas mostrava "0/0 contas online".
+    Causa dupla: (1) a arquitetura só registra quem tem `MASTER_URL` +
+    `WORKER_API_URL` — o container 2 nunca recebeu essas variáveis, então
+    nunca chamou `register`; (2) o master **não se registrava a si mesmo**:
+    a tabela `orchestrator_workers` ficava vazia e, com ela, a própria
+    conta do master ficava invisível e FORA das regras globais (sem claim,
+    sem interleaving, sem cooldown compartilhado — podia até colidir com a
+    conta 2 no mesmo grupo). Correções: (a) auto-registro do master — sem
+    `MASTER_URL`, o daemon cria um client apontando para a própria API
+    local (`http://127.0.0.1:3000`) e se registra como worker com
+    `WORKER_ID`, participando das regras globais como qualquer conta;
+    (b) o self-registration **não aplica** o desired config/campaign de
+    volta em si (ele é a fonte da verdade — aplicar de volta criaria um
+    loop em que cada rebalance encolheria a meta global); em vez disso,
+    o scheduler do master consome a própria fatia `metaTarget` direto do
+    coordenador (`resolveRoundTarget`), mantendo o interleaving justo;
+    (c) wiring completo no compose da stack (`WORKER_ID` estável e
+    legível por conta, `MASTER_URL` pela rede interna do docker);
+    (d) debug: boot log com role/workerId/target, logs de transição
+    (`running degraded` / `restored`) em vez de falha silenciosa no
+    heartbeat/claim/report. Testes: self-registro, não-aplicação do
+    desired-state no master, aplicação da fatia no worker real,
+    rebalance 4/3, e claim grantable pelo self (268/268).

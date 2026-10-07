@@ -191,6 +191,7 @@ One image, roles by env. Exactly one container runs as master:
 environment:
   NODE_ROLE: master
   WORKER_ID: master-1
+  WORKER_API_URL: http://<master-host>/        # how the master is displayed in the panel
 
 # each additional account container
 environment:
@@ -204,14 +205,23 @@ environment:
 - Workers register + heartbeat every 15s (sending their group list + status);
   the master pushes the centralized config + campaign in the response, so
   editing config on the master propagates to every account automatically,
-  and round targets are rebalanced acrossalive workers.
+  and round targets are rebalanced across alive workers. Each worker adopts
+  its rebalanced share as the local `roundTargetSends`.
+- **Self-registration**: a master with no `MASTER_URL` registers its own
+  account as a worker through its local daemon API, so the master's sends
+  are coordinated under the same global rules and its account appears in
+  the panel like any other. The self-registration never applies the desired
+  config/campaign back onto itself (it is the source of truth) — instead
+  its scheduler consumes its rebalanced `metaTarget` share directly.
 - Before every send the worker claims a global per-group slot
   (`POST /api/v1/orchestrator/claim`); the master interleaves accounts by
   oldest last-grant and enforces a shared per-group cooldown. Stars/blocked
   reports quarantine the group globally for all workers.
 - If the master is unreachable, workers switch to degraded mode: they keep
   sending standalone (previous interleaving offsets persist per account) and
-  rejoin automatically.
+  rejoin automatically. State transitions are logged (`docker logs`) —
+  `[Interdivu Orchestrator] … running degraded` / `restored` — instead of
+  failing silently; boot logs state the role, worker id and master target.
 - Panel: "Orquestração" in the side menu (workers show a hint instead).
 - Endpoints (master only): `GET info`, `GET workers`, `DELETE workers?workerId=`,
   `GET grants?limit=`, `POST register|heartbeat|claim|report`.

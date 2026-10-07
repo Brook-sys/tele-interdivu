@@ -1,10 +1,11 @@
 import http from 'node:http';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { AutomationScheduler } from '../automation/scheduler';
 import { TelegramRunner } from '../automation/telegramRunner';
 import { AutomationDatabase } from '../db/database';
 import { OrchestratorCoordinator } from '../orchestrator/coordinator';
+import { OrchestratorWorkerClient } from '../orchestrator/workerClient';
 import { createOrchestratorHandler } from './orchestratorRoutes';
 
 async function startServer(isMaster: boolean) {
@@ -117,5 +118,77 @@ describe('Orchestrator REST API', () => {
       workerCtx.db.close();
       workerCtx.server.close();
     }
+  });
+});
+
+describe('Master self-registration and desired-state application', () => {
+  let ctx: Awaited<ReturnType<typeof startServer>>;
+  const TEST_HEARTBEAT_MS = 25;
+
+  beforeAll(async () => {
+    ctx = await startServer(true);
+  });
+
+  afterAll(() => {
+    ctx.db.close();
+    ctx.server.close();
+  });
+
+  it('self-registers the master without rewriting its own config, while real workers sync', async () => {
+    // Master runs with a lower global target than the worker default (23) so
+    // the desired-state push is observable
+    ctx.db.updateConfig({ roundTargetSends: 7 });
+
+    const selfDb = new AutomationDatabase(':memory:');
+    const workerDb = new AutomationDatabase(':memory:');
+    // Self must own a group for the claim path to be grantable
+    selfDb.upsertGroupState({
+      chatId: '-100',
+      title: 'Grupo do Master',
+      otherMessagesCount: 0,
+      slowmodeSeconds: 0,
+      starsCost: 0,
+      status: 'READY',
+    });
+
+    const masterUrl = `http://127.0.0.1:${ctx.port}`;
+    const selfClient = OrchestratorWorkerClient.createSelf(
+      selfDb, masterUrl, 'master-self', 'http://master.local:8090', TEST_HEARTBEAT_MS,
+    );
+    const workerClient = new OrchestratorWorkerClient(
+      workerDb, masterUrl, 'worker-2', 'http://worker.local:8091', undefined, true, TEST_HEARTBEAT_MS,
+    );
+
+    selfClient.startHeartbeatLoop(() => ({ todaySent: 0 }));
+    workerClient.startHeartbeatLoop(() => ({ todaySent: 0 }));
+
+    const reader = new OrchestratorCoordinator(ctx.db);
+    await vi.waitFor(() => {
+      expect(reader.getWorker('master-self')).toBeDefined();
+      expect(reader.getWorker('worker-2')).toBeDefined();
+    });
+
+    // The real worker adopts its rebalanced share of the master's target
+    await vi.waitFor(() => {
+      expect(workerDb.getConfig().roundTargetSends).toBe(3);
+    });
+
+    // The self-registration never applies desired state back onto the master
+    expect(selfDb.getConfig().roundTargetSends).toBe(23);
+
+    // Rebalance splits the global target across the two alive accounts
+    await vi.waitFor(() => {
+      expect(reader.getWorker('master-self')?.metaTarget).toBe(4);
+      expect(reader.getWorker('worker-2')?.metaTarget).toBe(3);
+    });
+
+    // The self-registered master claims send slots like any other worker
+    const claim = await selfClient.claimSendSlot('-100', 'Grupo do Master');
+    expect(claim?.granted).toBe(true);
+
+    selfClient.stopHeartbeatLoop();
+    workerClient.stopHeartbeatLoop();
+    selfDb.close();
+    workerDb.close();
   });
 });
