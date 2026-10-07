@@ -138,8 +138,18 @@ export class OrchestratorWorkerClient {
 
   private applyDesiredCampaign(desired: NonNullable<HeartbeatResponse['desiredCampaign']>) {
     const current = this.db.getCampaign();
+    // Rows are recreated locally on every sync, so template payloads must be
+    // normalized to content-only: a leaked master-local id would route
+    // `saveCampaignTemplate` through its update path against rows that no
+    // longer exist after the delete step
+    const desiredTemplates = (desired.templates || []).map((template) => ({
+      title: template.title,
+      content: template.content,
+      weight: template.weight,
+      isEnabled: template.isEnabled,
+    }));
 
-    if (desired.templates?.length) {
+    if (desiredTemplates.length) {
       const desiredLinks = desired.allLinks?.length
         ? desired.allLinks
         // Legacy payload: a plain url list means enabled links
@@ -158,12 +168,12 @@ export class OrchestratorWorkerClient {
             ? destinationIndexById.get(link.destinationId) : undefined,
         }));
 
-        const isChanged = this.projectTemplates(current.templates) !== this.projectTemplates(desired.templates)
+        const isChanged = this.projectTemplates(current.templates) !== this.projectTemplates(desiredTemplates)
           || this.projectLinks(currentLinks) !== this.projectLinks(desiredLinks)
           || this.projectDestinations(current.destinations) !== this.projectDestinations(desired.destinations);
         if (isChanged) {
           this.db.replaceCampaignContent(
-            current.id, desired.templates, desiredLinks, desired.destinations,
+            current.id, desiredTemplates, desiredLinks, desired.destinations,
           );
         }
         return;
@@ -171,10 +181,10 @@ export class OrchestratorWorkerClient {
 
       // Legacy multi-template payload from an older master image — local
       // destinations are preserved, links come back unassigned
-      const isChanged = this.projectTemplates(current.templates) !== this.projectTemplates(desired.templates)
+      const isChanged = this.projectTemplates(current.templates) !== this.projectTemplates(desiredTemplates)
         || this.projectLinks(current.allLinks) !== this.projectLinks(desiredLinks);
       if (isChanged) {
-        this.db.replaceCampaignContent(current.id, desired.templates, desiredLinks);
+        this.db.replaceCampaignContent(current.id, desiredTemplates, desiredLinks);
       }
       return;
     }

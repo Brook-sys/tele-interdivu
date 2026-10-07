@@ -159,6 +159,28 @@ describe('Master self-registration and desired-state application', () => {
       workerDb, masterUrl, 'worker-2', 'http://worker.local:8091', undefined, true, TEST_HEARTBEAT_MS,
     );
 
+    // Master carries real campaign content so the worker exercises the full
+    // desired-campaign apply path (template rows are recreated locally)
+    const masterCampaignId = ctx.db.getCampaign().id;
+    ctx.db.saveCampaignTemplate({
+      campaignId: masterCampaignId,
+      title: 'Principal',
+      content: 'Olá {link}',
+      weight: 3,
+      isEnabled: true,
+    });
+    const masterDestination = ctx.db.saveDestination({
+      campaignId: masterCampaignId,
+      name: 'Grupo Alvo',
+      weight: 2,
+    });
+    ctx.db.saveCampaignLink({
+      campaignId: masterCampaignId,
+      url: 'https://t.me/promo',
+      isEnabled: true,
+      destinationId: masterDestination.id,
+    });
+
     selfClient.startHeartbeatLoop(() => ({ todaySent: 0 }));
     workerClient.startHeartbeatLoop(() => ({ todaySent: 0 }));
 
@@ -175,6 +197,19 @@ describe('Master self-registration and desired-state application', () => {
 
     // The self-registration never applies desired state back onto the master
     expect(selfDb.getConfig().roundTargetSends).toBe(23);
+
+    // The worker adopts the master's campaign content, rebinding links to
+    // its own local destination ids, and stays healthy while doing so
+    await vi.waitFor(() => {
+      const synced = workerDb.getCampaign();
+      expect(synced.destinations.map((destination) => destination.name)).toEqual(['Grupo Alvo']);
+      expect(synced.templates.some((template) => template.title === 'Principal')).toBe(true);
+      expect(synced.allLinks[0].url).toBe('https://t.me/promo');
+      expect(synced.allLinks[0].destinationId).toBeDefined();
+    });
+    expect(workerClient.getIsDegraded()).toBe(false);
+    expect(selfClient.getIsDegraded()).toBe(false);
+    expect(selfDb.getCampaign().destinations).toEqual([]);
 
     // Rebalance splits the global target across the two alive accounts
     await vi.waitFor(() => {

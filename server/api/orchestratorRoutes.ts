@@ -149,7 +149,14 @@ export function createOrchestratorHandler(
             // Legacy fields kept so workers on older images keep working
             spintaxTemplate: campaign.spintaxTemplate,
             links: campaign.links,
-            templates: campaign.templates,
+            // Content-only projections: local row ids must never leak to
+            // workers (their databases assign their own ids)
+            templates: campaign.templates.map((template) => ({
+              title: template.title,
+              content: template.content,
+              weight: template.weight,
+              isEnabled: template.isEnabled,
+            })),
             allLinks: campaign.allLinks.map((link) => ({
               url: link.url,
               isEnabled: link.isEnabled,
