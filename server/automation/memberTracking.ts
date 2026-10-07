@@ -1,6 +1,7 @@
 import type { AutomationDatabase } from '../db/database';
 import type { InviteResolveResult } from './telegramRunner';
 
+import { FloodWaitActiveError } from './resolveGuard';
 import { parseCampaignLinkTarget } from './telegramRunner';
 
 const TICK_INTERVAL_MS = 60_000;
@@ -39,6 +40,9 @@ export async function runMemberTrackingTick(
     try {
       resolved = await resolveLink(link.url);
     } catch (err: any) {
+      // A FLOOD_WAIT window blocks the whole pass; stop here so the loop
+      // does not keep poking the API through the wait
+      if (err instanceof FloodWaitActiveError) return;
       const message = String(err?.errorMessage || err?.message || err);
       if (/INVITE_HASH_EXPIRED|INVITE_HASH_INVALID|USERNAME_NOT_FOUND|USERNAME_INVALID/.test(message)) {
         db.markCampaignLinkResolved(link.id, { failed: true });

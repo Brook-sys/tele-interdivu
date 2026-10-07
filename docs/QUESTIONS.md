@@ -553,3 +553,27 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     onde toda mudança de settings passa; (3) os toggles da UI ficam
     desabilitados com o proxy ativo. Com isso a promessa da doc é
     verdadeira: sem relay, sem conexão — nunca direto.
+
+67. **Flood eterno em `messages.CheckChatInvite` — a conta ficava presa
+    em FLOOD_WAIT e cada nova tentativa renovava o castigo** — O erro
+    `RPCError 420: FLOOD_WAIT_1072 (caused by messages.CheckChatInvite)`
+    aparecia no painel ("Internal server error (campaign/links/resolve)")
+    e nunca saía. Causa em cadeia: (1) `resolveInviteLink`/
+    `resolvePublicUsername` não tinham cache — cada "Adicionar link"
+    resolvia implicitamente, cada "checar membros" re-resolvia o mesmo
+    hash, e o fluxo de candidatos extraídos resolvia um por clique; (2)
+    não havia pacing entre resoluções — uma sequência de cliques virava
+    rajada; (3) pior de tudo: nenhum tratamento de `FLOOD_WAIT` —
+    durante a janela de castigo, cada novo clique reenviava o request,
+    e o Telegram renovava/estendia a janela, então a conta nunca
+    deixava de "receber too many requests". Corrigido com o
+    `ResolveGuard` (`server/automation/resolveGuard.ts`), por onde
+    **toda** resolução agora passa: cache de 10 min por alvo (re-checar
+    o mesmo link custa zero chamadas), pacing humano de 4 s entre
+    chamadas reais, e portão de flood que registra a janela inteira do
+    Telegram e recusa novas tentativas com erro amigável (HTTP 429
+    "Telegram flood limit active — try again in N min") até a janela
+    expirar — sem tocar na API, sem renovar o castigo. O loop de member
+    tracking aborta a passada ao encontrar flood. Nada de resolução
+    automática nova: continua tudo no clique; o guard só garante que os
+    cliques não viram rajada e que o castigo é honrado até o fim.

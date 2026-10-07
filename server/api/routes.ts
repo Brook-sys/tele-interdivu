@@ -4,6 +4,7 @@ import { URL } from 'node:url';
 import type { TargetChatInfo, TelegramRunner } from '../automation/telegramRunner';
 import type { AutomationDatabase } from '../db/database';
 
+import { FloodWaitActiveError } from '../automation/resolveGuard';
 import { type AutomationScheduler, evaluateGroupEligibility } from '../automation/scheduler';
 import { compileSpunMessage, validateSpintaxSyntax } from '../automation/spintax';
 import { parseCampaignLinkTarget } from '../automation/telegramRunner';
@@ -345,6 +346,10 @@ export function createApiHandler(
           sendJson(res, 200, { success: true, resolved });
           return true;
         } catch (err: any) {
+          if (err instanceof FloodWaitActiveError) {
+            sendError(res, 429, err.message);
+            return true;
+          }
           const message = String(err?.errorMessage || err?.message || err);
           if (/INVITE_HASH_EXPIRED|INVITE_HASH_INVALID/.test(message)) {
             db.markExtractedResolved(body.kind, body.value, { failed: true });
@@ -547,6 +552,10 @@ export function createApiHandler(
           sendJson(res, 200, { success: true, resolved });
           return true;
         } catch (err: any) {
+          if (err instanceof FloodWaitActiveError) {
+            sendError(res, 429, err.message);
+            return true;
+          }
           const message = String(err?.errorMessage || err?.message || err);
           if (/INVITE_HASH_EXPIRED|INVITE_HASH_INVALID|USERNAME_NOT_FOUND|USERNAME_INVALID/.test(message)) {
             db.markCampaignLinkResolved(link.id, { failed: true });

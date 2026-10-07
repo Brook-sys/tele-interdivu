@@ -3,6 +3,7 @@ import type { AutomationDatabase } from '../db/database';
 import { TELEGRAM_API_HASH, TELEGRAM_API_ID } from '../../src/config';
 import { Api as GramJs, errors, sessions } from '../../src/lib/gramjs';
 import { extractLinks } from './extractors/links';
+import { FloodWaitActiveError, ResolveGuard } from './resolveGuard';
 
 import TelegramClient from '../../src/lib/gramjs/client/TelegramClient';
 import { setProxyRelayOrigin } from '../../src/lib/gramjs/extensions/PromisedWebSockets';
@@ -134,6 +135,8 @@ export function getIsPermanentParticipantError(message: string): boolean {
 
 export class TelegramRunner {
   private client?: TelegramClient;
+
+  private readonly resolveGuard = new ResolveGuard();
 
   private targetChatMap = new Map<string, TargetChatInfo>();
 
@@ -509,44 +512,77 @@ export class TelegramRunner {
   async resolveInviteLink(hash: string): Promise<InviteResolveResult | undefined> {
     if (!this.client || !this.client.isConnected()) return undefined;
 
-    const result = await this.client.invoke(
-      new GramJs.messages.CheckChatInvite({ hash }),
-    ) as any;
+    const cacheKey = `invite:${hash}`;
+    const cached = this.resolveGuard.getCached<InviteResolveResult>(cacheKey);
+    if (cached) return cached;
+
+    this.resolveGuard.assertNotFlooded();
+    await this.resolveGuard.awaitPace();
+
+    let result: any;
+    try {
+      result = await this.client.invoke(
+        new GramJs.messages.CheckChatInvite({ hash }),
+      ) as any;
+    } catch (err) {
+      const floodSeconds = this.resolveGuard.registerFlood(err);
+      if (floodSeconds !== undefined) throw new FloodWaitActiveError(floodSeconds);
+      throw err;
+    }
 
     if (!result) return undefined;
+
+    let resolved: InviteResolveResult;
 
     // chatInviteAlready: our account is already a member of the target
     if (result.className === 'ChatInviteAlready') {
       const chatObj = result.chat;
       const isChannel = chatObj?.className === 'Channel';
-      return {
+      resolved = {
         title: chatObj?.title || '(sem título)',
         members: chatObj?.participantsCount,
         chatType: isChannel ? (chatObj.broadcast ? 'channel' : 'group') : 'group',
         photoB64: this.extractStrippedPhotoB64(chatObj?.photo),
       };
+    } else {
+      resolved = {
+        title: result.title || '(sem título)',
+        members: result.participantsCount,
+        chatType: result.channel
+          ? (result.broadcast ? 'channel' : 'group')
+          : 'group',
+        about: result.about,
+        photoB64: this.extractStrippedPhotoB64(result.photo),
+      };
     }
 
-    return {
-      title: result.title || '(sem título)',
-      members: result.participantsCount,
-      chatType: result.channel
-        ? (result.broadcast ? 'channel' : 'group')
-        : 'group',
-      about: result.about,
-      photoB64: this.extractStrippedPhotoB64(result.photo),
-    };
+    this.resolveGuard.store(cacheKey, resolved);
+    return resolved;
   }
 
   // Resolves a public t.me/username destination (read-only)
   async resolvePublicUsername(username: string): Promise<InviteResolveResult | undefined> {
     if (!this.client || !this.client.isConnected()) return undefined;
 
-    const resolved = await this.client.invoke(
-      new GramJs.contacts.ResolveUsername({ username }),
-    ) as any;
+    const cacheKey = `user:${username}`;
+    const cached = this.resolveGuard.getCached<InviteResolveResult>(cacheKey);
+    if (cached) return cached;
 
-    const chat = (resolved?.chats || [])[0];
+    this.resolveGuard.assertNotFlooded();
+    await this.resolveGuard.awaitPace();
+
+    let resolvedData: any;
+    try {
+      resolvedData = await this.client.invoke(
+        new GramJs.contacts.ResolveUsername({ username }),
+      ) as any;
+    } catch (err) {
+      const floodSeconds = this.resolveGuard.registerFlood(err);
+      if (floodSeconds !== undefined) throw new FloodWaitActiveError(floodSeconds);
+      throw err;
+    }
+
+    const chat = (resolvedData?.chats || [])[0];
     if (!chat) return undefined;
 
     const isChannel = chat.className === 'Channel';
@@ -574,13 +610,16 @@ export class TelegramRunner {
       // Full info unavailable (e.g. restricted/left chat): basics still apply
     }
 
-    return {
+    const resolved: InviteResolveResult = {
       title: chat.title || '(sem título)',
       members,
       chatType: isChannel ? (chat.broadcast ? 'channel' : 'group') : 'group',
       about,
       photoB64: this.extractStrippedPhotoB64(chat.photo),
     };
+
+    this.resolveGuard.store(cacheKey, resolved);
+    return resolved;
   }
 
   async resolveCampaignLink(url: string): Promise<InviteResolveResult | undefined> {

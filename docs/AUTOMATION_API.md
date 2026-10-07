@@ -224,6 +224,12 @@ environment:
   convite via `messages.CheckChatInvite` (read-only) e registra
   título/membros/tipo/about/foto-stripped na linha. 410 quando o convite está
   expirado/inválido (fica registrado para não esgotar re-tentativas).
+- Toda resolução de link (rotas `extract/resolve` e `campaign/links/resolve`)
+  passa pelo `ResolveGuard`: cache de 10 min por alvo, pacing humano de 4 s
+  entre chamadas reais e portão de `FLOOD_WAIT` — durante a janela de flood
+  a rota responde **429** com mensagem amigável em vez de reenviar ao
+  Telegram (reenviar dentro da janela renova o castigo). Cache continua
+  sendo servido durante a janela.
 
 ### Campaign CRUD (multiple templates + per-link toggles)
 
