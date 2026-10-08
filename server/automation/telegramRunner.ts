@@ -133,6 +133,14 @@ export function getIsPermanentParticipantError(message: string): boolean {
     .test(message) || /CHAT_RESTRICTED|USER_DEACTIVATED_BAN/.test(message);
 }
 
+// Identity of the signed-in account, captured at connect time and reported to
+// the orchestration panel
+export interface AccountInfo {
+  userId: string;
+  username?: string;
+  firstName?: string;
+}
+
 export class TelegramRunner {
   private client?: TelegramClient;
 
@@ -140,7 +148,7 @@ export class TelegramRunner {
 
   private targetChatMap = new Map<string, TargetChatInfo>();
 
-  private selfUserId?: string;
+  private accountInfo?: AccountInfo;
 
   private lastUpdateReceivedAt?: number;
 
@@ -172,6 +180,12 @@ export class TelegramRunner {
     };
   }
 
+  // Last captured identity (memory first, persisted state as fallback so the
+  // panel still knows whose account this is when the automation is disarmed)
+  getAccountInfo(): AccountInfo | undefined {
+    return this.accountInfo ?? this.db.getStateJson<AccountInfo>('account-info');
+  }
+
   async start(
     sessionData: any,
     targetChats: TargetChatInfo[],
@@ -182,7 +196,7 @@ export class TelegramRunner {
 
     this.targetChatMap.clear();
     this.historyCheckCache.clear();
-    this.selfUserId = undefined;
+    this.accountInfo = undefined;
     targetChats.forEach((chat) => {
       this.targetChatMap.set(chat.id, chat);
     });
@@ -228,6 +242,10 @@ export class TelegramRunner {
 
     await client.connect();
     this.client = client;
+
+    // Identity is cosmetic for sending but required by the orchestration
+    // panel, so capture it in the background without blocking the start
+    void this.captureAccountInfo();
   }
 
   async reconnect(): Promise<boolean> {
@@ -476,24 +494,32 @@ export class TelegramRunner {
     }
   }
 
-  // Resolves our own user id once per session so basic-group probes can
-  // check membership against the participant list
-  private async fetchSelfUserId(): Promise<string | undefined> {
-    if (this.selfUserId) return this.selfUserId;
-    if (!this.client || !this.client.isConnected()) return undefined;
-
+  // Resolves the signed-in account's identity once per session so basic-group
+  // probes can check membership and the orchestration panel can show which
+  // account this daemon drives
+  private async captureAccountInfo(): Promise<void> {
+    if (!this.client || !this.client.isConnected()) return;
     try {
       const result = await this.client.invoke(
         new GramJs.users.GetUsers({ id: [new GramJs.InputUserSelf()] }),
       ) as any;
-      const selfId = result?.[0]?.id !== undefined ? String(result[0].id) : undefined;
-      if (selfId) {
-        this.selfUserId = selfId;
-      }
-      return selfId;
+      const user = result?.[0];
+      if (user?.id === undefined) return;
+      this.accountInfo = {
+        userId: String(user.id),
+        username: user.username || undefined,
+        firstName: user.firstName || undefined,
+      };
+      this.db.saveStateJson('account-info', this.accountInfo);
     } catch {
-      return undefined;
+      // Identity is cosmetic — probes fall back to per-call resolution
     }
+  }
+
+  private async fetchSelfUserId(): Promise<string | undefined> {
+    if (this.accountInfo?.userId) return this.accountInfo.userId;
+    await this.captureAccountInfo();
+    return this.accountInfo?.userId;
   }
 
   // photoStrippedSize ships inline bytes (a few hundred B), so storing it

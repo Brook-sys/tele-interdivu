@@ -2,15 +2,74 @@ import type http from 'node:http';
 
 import type { AutomationScheduler } from '../automation/scheduler';
 import type { TelegramRunner } from '../automation/telegramRunner';
-import type { AutomationDatabase } from '../db/database';
-import type { GrantRecord, OrchestratorCoordinator } from '../orchestrator/coordinator';
+import type {
+  AutomationDatabase,
+  AutomationDbConfig,
+} from '../db/database';
+import type {
+  GrantRecord,
+  OrchestratorCommand,
+  OrchestratorCommandAck,
+  OrchestratorCoordinator,
+} from '../orchestrator/coordinator';
 
+import { OVERRIDEABLE_CONFIG_FIELDS, parseCampaignContentPayload } from '../db/database';
 import { readJsonBody, sendError, sendJson } from './httpHelper';
 import { createApiHandler as createAutomationApiHandler } from './routes';
 
 export interface OrchestratorOptions {
   isMaster: boolean;
   workerId: string;
+}
+
+// Validates a sparse override patch against the whitelist; returns the first
+// violation as an HTTP-ready message
+function validateOverridePatch(patch: { set?: Record<string, unknown>; clear?: string[] }): string | undefined {
+  for (const [field, value] of Object.entries(patch.set || {})) {
+    const expectedType = OVERRIDEABLE_CONFIG_FIELDS[field as keyof AutomationDbConfig];
+    if (!expectedType) {
+      return `Field '${field}' is not globally overrideable`;
+    }
+    if (typeof value !== expectedType) {
+      return `Field '${field}' expects a ${expectedType} value`;
+    }
+    if (field === 'mode' && value !== 'manual' && value !== 'continuous') {
+      return 'Field \'mode\' must be \'manual\' or \'continuous\'';
+    }
+    if (expectedType === 'number' && !Number.isFinite(Number(value))) {
+      return `Field '${field}' must be a finite number`;
+    }
+    if (expectedType === 'number' && Number(value) < 0) {
+      return `Field '${field}' must not be negative`;
+    }
+    if ((field === 'sleepWindowStart' || field === 'sleepWindowEnd') && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(value))) {
+      return `Field '${field}' must be a valid HH:MM time`;
+    }
+  }
+  for (const field of patch.clear || []) {
+    if (!OVERRIDEABLE_CONFIG_FIELDS[field as keyof AutomationDbConfig]) {
+      return `Field '${field}' is not globally overrideable`;
+    }
+  }
+  return undefined;
+}
+
+// Computes the current global state for a given account: sparse overrides
+// plus the rebalanced round-target share when a global target is defined.
+// Without a global target every account keeps its own local round target
+function resolveGlobalState(
+  db: AutomationDatabase,
+  coordinator: OrchestratorCoordinator,
+  workerId: string,
+  serverNow: number,
+): { overrides: Partial<AutomationDbConfig>; roundTargetShare: number | undefined } {
+  const overrides = db.listOverrides();
+  if (typeof overrides.roundTargetSends === 'number') {
+    coordinator.rebalanceMetaTargets(overrides.roundTargetSends, serverNow);
+    return { overrides, roundTargetShare: coordinator.getWorker(workerId)?.metaTarget };
+  }
+  coordinator.clearMetaTargets();
+  return { overrides, roundTargetShare: undefined };
 }
 
 // Master-only control endpoints under /api/v1/orchestrator/. Not present at
@@ -74,6 +133,64 @@ export function createOrchestratorHandler(
         return true;
       }
 
+      if (route === '/overrides' && method === 'GET') {
+        sendJson(res, 200, { overrides: db.listOverrides() });
+        return true;
+      }
+
+      if (route === '/overrides' && method === 'PUT') {
+        const body = await readJsonBody<{ set?: Record<string, unknown>; clear?: string[] }>(req);
+        const validationError = validateOverridePatch(body);
+        if (validationError) {
+          sendError(res, 400, validationError);
+          return true;
+        }
+        for (const [field, value] of Object.entries(body.set || {})) {
+          db.setOverride(field, value as string | number | boolean);
+        }
+        for (const field of body.clear || []) {
+          db.clearOverride(field);
+        }
+        const state = resolveGlobalState(db, coordinator, options.workerId, serverNow);
+        // The master's own account consumes overrides through the same cache
+        // the workers use, so refresh it right away instead of waiting a
+        // heartbeat tick
+        db.saveOrchestratorCache(state);
+        sendJson(res, 200, { overrides: state.overrides });
+        return true;
+      }
+
+      if (route === '/workers/command' && method === 'POST') {
+        const body = await readJsonBody<{ workerId?: string; type?: string; payload?: unknown }>(req);
+        if (!body.workerId || !body.type) {
+          sendError(res, 400, 'workerId and type are required');
+          return true;
+        }
+        const commandType = body.type as OrchestratorCommand['type'];
+        if (commandType !== 'start' && commandType !== 'stop' && commandType !== 'campaign-copy') {
+          sendError(res, 400, 'type must be \'start\', \'stop\' or \'campaign-copy\'');
+          return true;
+        }
+        if (!coordinator.getWorker(body.workerId)) {
+          sendError(res, 404, `Unknown worker '${body.workerId}'`);
+          return true;
+        }
+        const payload = commandType === 'campaign-copy' ? parseCampaignContentPayload(body.payload) : undefined;
+        if (commandType === 'campaign-copy' && !payload) {
+          sendError(res, 400, 'Invalid campaign payload');
+          return true;
+        }
+        const command: OrchestratorCommand = {
+          id: `cmd-${serverNow}-${Math.random().toString(36).slice(2, 8)}`,
+          type: commandType,
+          payload,
+          issuedAt: serverNow,
+        };
+        coordinator.setPendingCommand(body.workerId, command);
+        sendJson(res, 200, { success: true, command: { id: command.id, type: command.type } });
+        return true;
+      }
+
       if (route === '/register' && method === 'POST') {
         const body = await readJsonBody<{
           workerId: string; apiUrl: string; groups?: string[]; version?: string;
@@ -99,6 +216,7 @@ export function createOrchestratorHandler(
           groups?: string[];
           version?: string;
           status?: Record<string, unknown>;
+          commandAcks?: OrchestratorCommandAck[];
         }>(req);
         if (!body.workerId || !body.apiUrl) {
           sendError(res, 400, 'workerId and apiUrl are required');
@@ -112,64 +230,28 @@ export function createOrchestratorHandler(
           statusSnapshot: body.status,
         });
 
-        const config = db.getConfig();
-        const campaign = db.getCampaign();
-        coordinator.rebalanceMetaTargets(config.roundTargetSends, serverNow);
+        // Acks are processed before the pending command is read so a command
+        // is considered delivered on the very response that carries its ack
+        for (const ack of body.commandAcks || []) {
+          if (!ack?.id) continue;
+          coordinator.ackCommand(body.workerId, {
+            id: String(ack.id),
+            ok: Boolean(ack.ok),
+            message: ack.message === undefined ? undefined : String(ack.message).slice(0, 200),
+            error: ack.error === undefined ? undefined : String(ack.error).slice(0, 200),
+            at: serverNow,
+          });
+        }
 
-        // Destinations sync by index (worker assigns its own local ids)
-        const destinationIndexById = new Map(
-          campaign.destinations.map((destination, index) => [destination.id, index]),
+        const { overrides, roundTargetShare } = resolveGlobalState(
+          db, coordinator, body.workerId, serverNow,
         );
+        const command = coordinator.takePendingCommand(body.workerId, serverNow);
 
-        const worker = coordinator.getWorker(body.workerId);
-        sendJson(res, 200, {
-          serverNow,
-          // Desired-state pushed centrally so workers align automatically
-          desiredConfig: {
-            mode: config.mode,
-            minDelaySeconds: config.minDelaySeconds,
-            maxDelaySeconds: config.maxDelaySeconds,
-            roundIntervalMinutes: config.roundIntervalMinutes,
-            roundTargetSends: worker?.metaTarget ?? config.roundTargetSends,
-            minOtherMessages: config.minOtherMessages,
-            minResendIntervalMinutes: config.minResendIntervalMinutes,
-            sleepWindowEnabled: config.sleepWindowEnabled,
-            sleepWindowStart: config.sleepWindowStart,
-            sleepWindowEnd: config.sleepWindowEnd,
-            dailyLimit: config.dailyLimit,
-            linkPreviewEnabled: config.linkPreviewEnabled,
-            microPauseEnabled: config.microPauseEnabled,
-            microPauseEveryMin: config.microPauseEveryMin,
-            microPauseEveryMax: config.microPauseEveryMax,
-            microPauseSeconds: config.microPauseSeconds,
-            extractorEnabled: config.extractorEnabled,
-            templateRotationEnabled: config.templateRotationEnabled,
-          },
-          desiredCampaign: {
-            // Legacy fields kept so workers on older images keep working
-            spintaxTemplate: campaign.spintaxTemplate,
-            links: campaign.links,
-            // Content-only projections: local row ids must never leak to
-            // workers (their databases assign their own ids)
-            templates: campaign.templates.map((template) => ({
-              title: template.title,
-              content: template.content,
-              weight: template.weight,
-              isEnabled: template.isEnabled,
-            })),
-            allLinks: campaign.allLinks.map((link) => ({
-              url: link.url,
-              isEnabled: link.isEnabled,
-              destinationIndex: link.destinationId !== undefined
-                ? destinationIndexById.get(link.destinationId) : undefined,
-            })),
-            destinations: campaign.destinations.map((destination) => ({
-              name: destination.name,
-              weight: destination.weight,
-              isEnabled: destination.isEnabled,
-            })),
-          },
-        });
+        // Sparse global overrides (key always present — `{}` clears them) plus
+        // the optional per-account share and pending command; undefined keys
+        // are dropped by JSON serialization
+        sendJson(res, 200, { serverNow, overrides, roundTargetShare, command });
         return true;
       }
 

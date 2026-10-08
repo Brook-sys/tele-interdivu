@@ -28,6 +28,31 @@ export interface AutomationDbConfig {
   memberTrackingIntervalHours: number;
 }
 
+// Fields the orchestration master may define globally: a defined override
+// replaces the local value at read time (effective config), while the local
+// config table is never touched. Extending this map is protocol-compatible —
+// old workers simply ignore fields they do not know.
+export const OVERRIDEABLE_CONFIG_FIELDS: Partial<Record<keyof AutomationDbConfig, 'string' | 'number' | 'boolean'>> = {
+  mode: 'string',
+  minDelaySeconds: 'number',
+  maxDelaySeconds: 'number',
+  roundIntervalMinutes: 'number',
+  roundTargetSends: 'number',
+  minOtherMessages: 'number',
+  minResendIntervalMinutes: 'number',
+  sleepWindowEnabled: 'boolean',
+  sleepWindowStart: 'string',
+  sleepWindowEnd: 'string',
+  dailyLimit: 'number',
+  linkPreviewEnabled: 'boolean',
+  microPauseEnabled: 'boolean',
+  microPauseEveryMin: 'number',
+  microPauseEveryMax: 'number',
+  microPauseSeconds: 'number',
+  extractorEnabled: 'boolean',
+  templateRotationEnabled: 'boolean',
+};
+
 export interface CampaignTemplateRecord {
   id: number;
   title: string;
@@ -339,6 +364,24 @@ export class AutomationDatabase {
         result TEXT
       );
 
+      -- Global values defined on the orchestration master (source of truth);
+      -- absence of a row means the field falls back to the account's local value
+      CREATE TABLE IF NOT EXISTS orchestrator_overrides (
+        field TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      -- Local per-daemon key-value cache: holds the last global state pushed
+      -- by the master (overrides + rebalanced round-target share) so effective
+      -- config survives restarts and degraded periods without ever writing
+      -- over the local config table
+      CREATE TABLE IF NOT EXISTS orchestrator_state (
+        key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_grants_chat ON orchestrator_grants(chat_id, granted_at DESC);
     `);
 
@@ -418,6 +461,19 @@ export class AutomationDatabase {
       this.db.exec('ALTER TABLE config ADD COLUMN member_tracking_interval_hours INTEGER NOT NULL DEFAULT 6');
     } catch {
       // Column already exists
+    }
+
+    // Orchestrator command channel: one pending command per worker plus the
+    // last acknowledged result for panel feedback
+    for (const ddl of [
+      'ALTER TABLE orchestrator_workers ADD COLUMN pending_command_json TEXT',
+      'ALTER TABLE orchestrator_workers ADD COLUMN last_command_ack_json TEXT',
+    ]) {
+      try {
+        this.db.exec(ddl);
+      } catch {
+        // Column already exists
+      }
     }
 
     for (const ddl of [
@@ -538,6 +594,109 @@ export class AutomationDatabase {
           4, Number(row.member_tracking_interval_hours),
         ),
     };
+  }
+
+  // Global overrides defined on the orchestration master (source of truth).
+  // Only whitelisted fields are readable here so unknown rows never leak
+  listOverrides(): Partial<AutomationDbConfig> {
+    const rows = this.db.prepare('SELECT field, value_json FROM orchestrator_overrides').all() as any[];
+    const overrides: Record<string, unknown> = {};
+    for (const row of rows) {
+      const field = String(row.field);
+      if (!OVERRIDEABLE_CONFIG_FIELDS[field as keyof AutomationDbConfig]) continue;
+      try {
+        overrides[field] = JSON.parse(String(row.value_json));
+      } catch {
+        // Corrupt row: treated as absent
+      }
+    }
+    return overrides;
+  }
+
+  setOverride(field: string, value: string | number | boolean) {
+    this.db.prepare(`
+      INSERT INTO orchestrator_overrides (field, value_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(field) DO UPDATE SET
+        value_json = excluded.value_json,
+        updated_at = excluded.updated_at
+    `).run(field, JSON.stringify(value), Math.floor(Date.now() / 1000));
+  }
+
+  clearOverride(field: string) {
+    this.db.prepare('DELETE FROM orchestrator_overrides WHERE field = ?').run(field);
+  }
+
+  // Last global state pushed by the master (workers) or refreshed locally on
+  // every master edit (master's own account). Persisted so effective config
+  // survives restarts and degraded periods — the local config stays pristine
+  getOrchestratorCache(): { overrides: Partial<AutomationDbConfig>; roundTargetShare?: number } {
+    const raw = this.getStateJson('orchestrator-cache');
+    if (!raw || typeof raw !== 'object') return { overrides: {} };
+    const cache = raw as { overrides?: Record<string, unknown>; roundTargetShare?: unknown };
+    const overrides: Record<string, unknown> = {};
+    for (const [field, value] of Object.entries(cache.overrides || {})) {
+      if (!OVERRIDEABLE_CONFIG_FIELDS[field as keyof AutomationDbConfig]) continue;
+      overrides[field] = value;
+    }
+    return {
+      overrides,
+      roundTargetShare: Number.isFinite(Number(cache.roundTargetShare))
+        ? Number(cache.roundTargetShare) : undefined,
+    };
+  }
+
+  saveOrchestratorCache(cache: { overrides: Partial<AutomationDbConfig>; roundTargetShare?: number }) {
+    this.saveStateJson('orchestrator-cache', cache);
+  }
+
+  // Local config merged with active global overrides. `roundTargetSends` is
+  // special: a global target is split across alive accounts by the master, so
+  // the rebalanced share replaces it — the raw global value never reaches an
+  // individual account's effective config
+  getEffectiveConfig(): AutomationDbConfig {
+    const cache = this.getOrchestratorCache();
+    const effective = { ...this.getConfig() } as Record<string, unknown>;
+    for (const [field, value] of Object.entries(cache.overrides)) {
+      if (field === 'roundTargetSends') continue;
+      if (!OVERRIDEABLE_CONFIG_FIELDS[field as keyof AutomationDbConfig]) continue;
+      effective[field] = value;
+    }
+    if (cache.roundTargetShare !== undefined) {
+      effective.roundTargetSends = Math.max(1, cache.roundTargetShare);
+    }
+    return effective as AutomationDbConfig;
+  }
+
+  getOverriddenFields(): string[] {
+    const cache = this.getOrchestratorCache();
+    const fields = new Set(Object.keys(cache.overrides));
+    if (cache.roundTargetShare !== undefined) fields.add('roundTargetSends');
+    return [...fields];
+  }
+
+  // Generic per-daemon state (JSON key-value) used for the orchestration cache
+  // and the account identity captured at connect time
+  getStateJson<T>(key: string): T | undefined {
+    const row = this.db.prepare(
+      'SELECT value_json FROM orchestrator_state WHERE key = ?',
+    ).get(key) as any;
+    if (!row) return undefined;
+    try {
+      return JSON.parse(String(row.value_json)) as T;
+    } catch {
+      return undefined;
+    }
+  }
+
+  saveStateJson(key: string, value: unknown) {
+    this.db.prepare(`
+      INSERT INTO orchestrator_state (key, value_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        value_json = excluded.value_json,
+        updated_at = excluded.updated_at
+    `).run(key, JSON.stringify(value), Math.floor(Date.now() / 1000));
   }
 
   updateConfig(patch: Partial<AutomationDbConfig>): AutomationDbConfig {
@@ -1540,4 +1699,101 @@ export class AutomationDatabase {
   close() {
     this.db.close();
   }
+}
+
+// ---- Campaign copy payload (orchestrator command channel) ----
+
+export interface CampaignContentPayload {
+  templates: { title?: string; content: string; weight?: number; isEnabled?: boolean }[];
+  links: { url: string; isEnabled?: boolean; destinationIndex?: number }[];
+  destinations?: { name: string; weight?: number; isEnabled?: boolean }[];
+}
+
+const CAMPAIGN_COPY_MAX_TEMPLATES = 50;
+const CAMPAIGN_COPY_MAX_LINKS = 200;
+const CAMPAIGN_COPY_MAX_DESTINATIONS = 50;
+const CAMPAIGN_COPY_MAX_STRING_LENGTH = 4096;
+
+function parseBoundedString(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.length || value.length > CAMPAIGN_COPY_MAX_STRING_LENGTH) {
+    return undefined;
+  }
+  return value;
+}
+
+// Validates a campaign copy payload from the wire so a malformed command can
+// never sit in the queue or corrupt the target account's campaign tables.
+// `destinationIndex` must stay inside the destination list it refers to
+export function parseCampaignContentPayload(raw: unknown): CampaignContentPayload | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const source = raw as Record<string, unknown>;
+
+  const templatesRaw = source.templates;
+  const linksRaw = source.links;
+  const destinationsRaw = source.destinations;
+  if (!Array.isArray(templatesRaw) || !Array.isArray(linksRaw) || templatesRaw.length === 0) {
+    return undefined;
+  }
+  if (templatesRaw.length > CAMPAIGN_COPY_MAX_TEMPLATES || linksRaw.length > CAMPAIGN_COPY_MAX_LINKS) {
+    return undefined;
+  }
+  if (destinationsRaw !== undefined && (
+    !Array.isArray(destinationsRaw) || destinationsRaw.length > CAMPAIGN_COPY_MAX_DESTINATIONS
+  )) {
+    return undefined;
+  }
+
+  const templates: CampaignContentPayload['templates'] = [];
+  for (const item of templatesRaw) {
+    if (!item || typeof item !== 'object') return undefined;
+    const template = item as Record<string, unknown>;
+    const content = parseBoundedString(template.content);
+    if (!content) return undefined;
+    const title = template.title === undefined || template.title === null
+      ? undefined : parseBoundedString(template.title);
+    if (title === undefined && template.title !== undefined && template.title !== null) return undefined;
+    if (template.weight !== undefined && !Number.isFinite(Number(template.weight))) return undefined;
+    templates.push({
+      title,
+      content,
+      weight: template.weight === undefined ? undefined : Number(template.weight),
+      isEnabled: template.isEnabled === undefined ? undefined : Boolean(template.isEnabled),
+    });
+  }
+
+  const destinations: CampaignContentPayload['destinations'] = [];
+  if (destinationsRaw !== undefined) {
+    for (const item of destinationsRaw) {
+      if (!item || typeof item !== 'object') return undefined;
+      const destination = item as Record<string, unknown>;
+      const name = parseBoundedString(destination.name);
+      if (!name) return undefined;
+      if (destination.weight !== undefined && !Number.isFinite(Number(destination.weight))) return undefined;
+      destinations.push({
+        name,
+        weight: destination.weight === undefined ? undefined : Number(destination.weight),
+        isEnabled: destination.isEnabled === undefined ? undefined : Boolean(destination.isEnabled),
+      });
+    }
+  }
+
+  const links: CampaignContentPayload['links'] = [];
+  for (const item of linksRaw) {
+    if (!item || typeof item !== 'object') return undefined;
+    const link = item as Record<string, unknown>;
+    const url = parseBoundedString(link.url);
+    if (!url) return undefined;
+    if (link.destinationIndex !== undefined) {
+      const index = Number(link.destinationIndex);
+      if (!Number.isInteger(index) || index < 0 || index >= destinations.length) return undefined;
+    }
+    links.push({
+      url,
+      isEnabled: link.isEnabled === undefined ? undefined : Boolean(link.isEnabled),
+      destinationIndex: link.destinationIndex === undefined
+        ? undefined : Number(link.destinationIndex),
+    });
+  }
+
+  return { templates, links, destinations: destinationsRaw === undefined ? undefined : destinations };
 }

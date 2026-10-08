@@ -14,6 +14,59 @@ import { readJsonBody, sendError, sendJson } from './httpHelper';
 const TEST_SEND_COOLDOWN_MS = 15_000;
 let lastTestSendAt = 0;
 
+export interface AutomationStartResult {
+  success: boolean;
+  message: string;
+  groupsCount?: number;
+  usedSavedSession?: boolean;
+}
+
+// Restarts the automation from the daemon's own saved state (saved session +
+// group_state targets) — the same path the web UI takeover uses when invoked
+// with no body. Used by the takeover route and by the orchestrator command
+// channel, so a remote start reuses the exact session the account armed once
+export async function startAutomationFromSavedState(
+  db: AutomationDatabase,
+  runner: TelegramRunner,
+  scheduler: AutomationScheduler,
+): Promise<AutomationStartResult> {
+  const savedSession = db.getSession();
+  if (!savedSession) {
+    return {
+      success: false,
+      message: 'No sessionData provided and no saved session found — start from the web UI first',
+    };
+  }
+  let sessionData: any;
+  try {
+    sessionData = JSON.parse(savedSession);
+  } catch {
+    return { success: false, message: 'Saved session is corrupted — start from the web UI again' };
+  }
+  const targetChats = db.getAllGroupStates().map((g) => ({
+    id: g.chatId,
+    title: g.title,
+    accessHash: g.accessHash,
+  }));
+  if (!targetChats.length) {
+    return { success: false, message: 'No targetChats provided and no groups saved — start from the web UI first' };
+  }
+  scheduler.stop();
+  await runner.start(sessionData, targetChats);
+  scheduler.start();
+  return {
+    success: true,
+    message: 'Automation started from saved state',
+    groupsCount: targetChats.length,
+    usedSavedSession: true,
+  };
+}
+
+export async function stopAutomation(runner: TelegramRunner, scheduler: AutomationScheduler) {
+  scheduler.stop();
+  await runner.stop();
+}
+
 export function createApiHandler(
   db: AutomationDatabase,
   runner: TelegramRunner,
@@ -54,7 +107,11 @@ export function createApiHandler(
       // 1. GET status
       if (route === 'status' && method === 'GET') {
         const schedulerState = scheduler.getState();
-        const config = db.getConfig();
+        // Effective config: local values merged with the global overrides the
+        // master defined — this is what the scheduler actually runs with.
+        // `configOverriddenFields` lets the UI badge those fields
+        const config = db.getEffectiveConfig();
+        const configOverriddenFields = db.getOverriddenFields();
         const campaign = db.getCampaign();
         const serverNow = Math.floor(Date.now() / 1000);
         const todaySent = db.getTodaySentCount(serverNow);
@@ -119,6 +176,7 @@ export function createApiHandler(
           lastError: schedulerState.lastRunError,
           stats,
           config,
+          configOverriddenFields,
           campaign,
         });
         return true;
@@ -140,40 +198,18 @@ export function createApiHandler(
           })[];
         }>(req);
 
-        let sessionData = body.sessionData;
-        if (!sessionData) {
-          const savedSession = db.getSession();
-          if (!savedSession) {
-            sendError(res, 400, 'No sessionData provided and no saved session found — start from the web UI first');
-            return true;
-          }
-          try {
-            sessionData = JSON.parse(savedSession);
-          } catch {
-            sendError(res, 500, 'Saved session is corrupted — start from the web UI again');
-            return true;
-          }
-        } else {
-          db.saveSession(JSON.stringify(sessionData));
+        // Persist what the request provided; the start mechanics below then
+        // resolve whatever is still missing from saved state
+        if (body.sessionData) {
+          db.saveSession(JSON.stringify(body.sessionData));
         }
 
-        let targetChats = body.targetChats;
-        if (!targetChats || !Array.isArray(targetChats) || targetChats.length === 0) {
-          targetChats = db.getAllGroupStates().map((g) => ({
-            id: g.chatId,
-            title: g.title,
-            accessHash: g.accessHash,
-          }));
-          if (!targetChats.length) {
-            sendError(res, 400, 'No targetChats provided and no groups saved — start from the web UI first');
-            return true;
-          }
-        } else {
+        if (body.targetChats && Array.isArray(body.targetChats) && body.targetChats.length > 0) {
           // Sync target groups in group_state — removes any old/deleted chats
-          const validChatIds = targetChats.map((c) => c.id);
+          const validChatIds = body.targetChats.map((c) => c.id);
           db.syncTargetGroups(validChatIds);
 
-          targetChats.forEach((chat) => {
+          body.targetChats.forEach((chat) => {
             const existing = db.getGroupState(chat.id);
             const slowmodeSeconds = chat.slowmodeSeconds !== undefined
               ? chat.slowmodeSeconds
@@ -201,15 +237,16 @@ export function createApiHandler(
           });
         }
 
-        // Restart runner and scheduler cleanly
-        scheduler.stop();
-        await runner.start(sessionData, targetChats);
-        scheduler.start();
+        const result = await startAutomationFromSavedState(db, runner, scheduler);
+        if (!result.success) {
+          sendError(res, 400, result.message);
+          return true;
+        }
 
         sendJson(res, 200, {
           success: true,
           message: 'Automation takeover successful',
-          groupsCount: targetChats.length,
+          groupsCount: result.groupsCount,
           usedSavedSession: !body.sessionData,
         });
         return true;
@@ -217,8 +254,7 @@ export function createApiHandler(
 
       // 3. POST release (User pauses/stops automation, reclaiming session for browser)
       if (route === 'release' && method === 'POST') {
-        scheduler.stop();
-        await runner.stop();
+        await stopAutomation(runner, scheduler);
 
         sendJson(res, 200, { success: true, message: 'Automation stopped and session released' });
         return true;

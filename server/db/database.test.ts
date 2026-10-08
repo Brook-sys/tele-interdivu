@@ -1,6 +1,7 @@
+import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-import { AutomationDatabase, DEFAULT_CONFIG } from './database';
+import { AutomationDatabase, DEFAULT_CONFIG, parseCampaignContentPayload } from './database';
 
 describe('AutomationDatabase (in-memory SQLite)', () => {
   it('initializes default config on creation', () => {
@@ -25,6 +26,89 @@ describe('AutomationDatabase (in-memory SQLite)', () => {
     const reloaded = db.getConfig();
     expect(reloaded).toEqual(updated);
     db.close();
+  });
+
+  it('merges global overrides into the effective config without touching local values', () => {
+    const db = new AutomationDatabase(':memory:');
+    db.setOverride('minDelaySeconds', 90);
+    db.setOverride('roundTargetSends', 40);
+
+    const overrides = db.listOverrides();
+    expect(overrides.minDelaySeconds).toBe(90);
+    expect(overrides.roundTargetSends).toBe(40);
+
+    // The cache is empty until a master heartbeat pushes it: with no share
+    // the account keeps its own local round target
+    expect(db.getEffectiveConfig().roundTargetSends).toBe(DEFAULT_CONFIG.roundTargetSends);
+    expect(db.getEffectiveConfig().minDelaySeconds).toBe(DEFAULT_CONFIG.minDelaySeconds);
+
+    db.saveOrchestratorCache({
+      overrides: { minDelaySeconds: 90, roundTargetSends: 40 },
+      roundTargetShare: 20,
+    });
+    const effective = db.getEffectiveConfig();
+    expect(effective.minDelaySeconds).toBe(90);
+    // The share replaces the raw global target on the individual account
+    expect(effective.roundTargetSends).toBe(20);
+    expect(db.getOverriddenFields()).toEqual(
+      expect.arrayContaining(['minDelaySeconds', 'roundTargetSends']),
+    );
+
+    // Local values stay pristine and override removal restores them
+    expect(db.getConfig().minDelaySeconds).toBe(DEFAULT_CONFIG.minDelaySeconds);
+    db.saveOrchestratorCache({ overrides: {}, roundTargetShare: undefined });
+    expect(db.getEffectiveConfig().roundTargetSends).toBe(DEFAULT_CONFIG.roundTargetSends);
+    expect(db.getEffectiveConfig().minDelaySeconds).toBe(DEFAULT_CONFIG.minDelaySeconds);
+    expect(db.getOverriddenFields()).toEqual([]);
+
+    db.clearOverride('minDelaySeconds');
+    db.clearOverride('roundTargetSends');
+    expect(db.listOverrides()).toEqual({});
+    db.close();
+  });
+
+  it('keeps the cached overrides across a restart (degraded persistence)', () => {
+    const dbPath = '/tmp/opencode/automation-override-cache.test.db';
+    fs.rmSync(dbPath, { force: true });
+    const db = new AutomationDatabase(dbPath);
+    db.saveOrchestratorCache({ overrides: { dailyLimit: 50 }, roundTargetShare: 5 });
+    db.close();
+
+    // A fresh handle over the same file simulates a daemon restart with the
+    // master unreachable: the cached global rhythm still applies
+    const reopened = new AutomationDatabase(dbPath);
+    expect(reopened.getEffectiveConfig().dailyLimit).toBe(50);
+    expect(reopened.getEffectiveConfig().roundTargetSends).toBe(5);
+    expect(reopened.getConfig().dailyLimit).toBe(DEFAULT_CONFIG.dailyLimit);
+    reopened.close();
+    fs.rmSync(dbPath, { force: true });
+  });
+
+  it('validates campaign copy payloads', () => {
+    expect(parseCampaignContentPayload(undefined)).toBeUndefined();
+    expect(parseCampaignContentPayload({ templates: [], links: [] })).toBeUndefined();
+    expect(parseCampaignContentPayload({
+      templates: [{ content: 'oi' }],
+      links: [{ url: 'https://t.me/a', destinationIndex: 1 }],
+      destinations: [{ name: 'D' }],
+    })).toBeUndefined();
+
+    const valid = parseCampaignContentPayload({
+      templates: [{ title: 'P', content: 'oi {link}', weight: 2, isEnabled: true }],
+      links: [
+        { url: 'https://t.me/a', isEnabled: true, destinationIndex: 0 },
+        { url: 'https://t.me/b' },
+      ],
+      destinations: [{ name: 'D1', weight: 1, isEnabled: false }],
+    });
+    expect(valid).toEqual({
+      templates: [{ title: 'P', content: 'oi {link}', weight: 2, isEnabled: true }],
+      links: [
+        { url: 'https://t.me/a', isEnabled: true, destinationIndex: 0 },
+        { url: 'https://t.me/b', isEnabled: undefined, destinationIndex: undefined },
+      ],
+      destinations: [{ name: 'D1', weight: 1, isEnabled: false }],
+    });
   });
 
   it('saves and retrieves campaigns with JSON links', () => {

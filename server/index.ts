@@ -2,11 +2,14 @@ import './polyfills';
 
 import http from 'node:http';
 
+import type { OrchestratorCommand, OrchestratorCommandResult } from './orchestrator/coordinator';
+
 import { createOrchestratorHandler } from './api/orchestratorRoutes';
+import { startAutomationFromSavedState, stopAutomation } from './api/routes';
 import { startMemberTrackingLoop } from './automation/memberTracking';
 import { AutomationScheduler } from './automation/scheduler';
 import { TelegramRunner } from './automation/telegramRunner';
-import { AutomationDatabase } from './db/database';
+import { AutomationDatabase, parseCampaignContentPayload } from './db/database';
 import { OrchestratorCoordinator } from './orchestrator/coordinator';
 import { OrchestratorWorkerClient } from './orchestrator/workerClient';
 import { getProxyUrlFormatError } from './proxy/tunnel';
@@ -33,16 +36,57 @@ const coordinator = new OrchestratorCoordinator(db);
 // its own account through the local daemon API instead, so its sends are
 // coordinated under the same global rules as every other account
 const workerClient = !process.env.MASTER_URL && IS_MASTER
-  ? OrchestratorWorkerClient.createSelf(db, `http://127.0.0.1:${PORT}`, WORKER_ID, process.env.WORKER_API_URL || '')
-  : OrchestratorWorkerClient.fromEnv(db);
+  ? OrchestratorWorkerClient.createSelf(
+    db, `http://127.0.0.1:${PORT}`, WORKER_ID, process.env.WORKER_API_URL || '', undefined, handleOrchestratorCommand,
+  )
+  : OrchestratorWorkerClient.fromEnv(db, handleOrchestratorCommand);
 const scheduler = new AutomationScheduler(
   db,
   (chatId, text) => runner.sendMessage(chatId, text),
   (chatId, minRequired) => runner.checkOtherMessagesCount(chatId, minRequired),
   (chatId) => runner.probeChat(chatId),
   workerClient,
-  () => (IS_MASTER ? coordinator.getWorker(WORKER_ID)?.metaTarget : undefined),
 );
+
+// Executes commands issued from the orchestration panel through the heartbeat
+// channel. Every branch is idempotent, so re-delivery after a lost ack is
+// harmless. Commands only arrive once the heartbeat loop starts, long after
+// the consts above are initialized
+async function handleOrchestratorCommand(command: OrchestratorCommand): Promise<OrchestratorCommandResult> {
+  if (command.type === 'start') {
+    if (scheduler.getState().status !== 'STOPPED') {
+      return { ok: true, message: 'Automation was already running' };
+    }
+    const result = await startAutomationFromSavedState(db, runner, scheduler);
+    return result.success
+      ? { ok: true, message: `Started with ${result.groupsCount} groups` }
+      : { ok: false, error: result.message };
+  }
+
+  if (command.type === 'stop') {
+    if (scheduler.getState().status === 'STOPPED') {
+      return { ok: true, message: 'Automation was already stopped' };
+    }
+    await stopAutomation(runner, scheduler);
+    return { ok: true, message: 'Automation stopped' };
+  }
+
+  if (command.type === 'campaign-copy') {
+    const payload = parseCampaignContentPayload(command.payload);
+    if (!payload) {
+      return { ok: false, error: 'Invalid campaign payload' };
+    }
+    db.replaceCampaignContent(
+      db.getCampaign().id, payload.templates, payload.links, payload.destinations,
+    );
+    return {
+      ok: true,
+      message: `Campaign applied: ${payload.templates.length} templates, ${payload.links.length} links`,
+    };
+  }
+
+  return { ok: false, error: `Unknown command type: ${String(command.type)}` };
+}
 
 // Opt-in periodic member tracking for promoted links (read-only, paced)
 startMemberTrackingLoop(
@@ -96,11 +140,31 @@ server.listen(PORT, '127.0.0.1', () => {
     console.log(`[Interdivu Orchestrator] workerId='${WORKER_ID}' role=${NODE_ROLE} — ${hint}`);
   }
 
-  workerClient?.startHeartbeatLoop(() => ({
-    scheduler: scheduler.getState(),
-    todaySent: db.getTodaySentCount(Math.floor(Date.now() / 1000)),
-    isDegraded: workerClient.getIsDegraded(),
-  }));
+  workerClient?.startHeartbeatLoop(() => {
+    const effectiveConfig = db.getEffectiveConfig();
+    return {
+      scheduler: scheduler.getState(),
+      todaySent: db.getTodaySentCount(Math.floor(Date.now() / 1000)),
+      isDegraded: workerClient.getIsDegraded(),
+      account: runner.getAccountInfo(),
+      // Read-only digest of the effective rhythm so the panel can compare
+      // accounts without opening each one's settings
+      configDigest: {
+        mode: effectiveConfig.mode,
+        minDelaySeconds: effectiveConfig.minDelaySeconds,
+        maxDelaySeconds: effectiveConfig.maxDelaySeconds,
+        roundIntervalMinutes: effectiveConfig.roundIntervalMinutes,
+        roundTargetSends: effectiveConfig.roundTargetSends,
+        minOtherMessages: effectiveConfig.minOtherMessages,
+        minResendIntervalMinutes: effectiveConfig.minResendIntervalMinutes,
+        dailyLimit: effectiveConfig.dailyLimit,
+        sleepWindowEnabled: effectiveConfig.sleepWindowEnabled,
+        sleepWindowStart: effectiveConfig.sleepWindowStart,
+        sleepWindowEnd: effectiveConfig.sleepWindowEnd,
+      },
+      overriddenFields: db.getOverriddenFields(),
+    };
+  });
 });
 
 // Graceful shutdown

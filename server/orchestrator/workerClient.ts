@@ -1,4 +1,9 @@
 import type { AutomationDatabase, AutomationDbConfig } from '../db/database';
+import type {
+  OrchestratorCommand,
+  OrchestratorCommandAck,
+  OrchestratorCommandResult,
+} from './coordinator';
 
 export type OrchestratorSendResult = 'success' | 'slowmode' | 'flood' | 'stars' | 'blocked' | 'error';
 
@@ -11,22 +16,26 @@ interface ClaimDecision {
 
 interface HeartbeatResponse {
   serverNow: number;
-  desiredConfig?: Partial<AutomationDbConfig>;
-  desiredCampaign?: {
-    spintaxTemplate?: string;
-    links?: string[];
-    templates?: { title: string; content: string; weight: number; isEnabled: boolean }[];
-    allLinks?: { url: string; isEnabled: boolean; destinationIndex?: number }[];
-    destinations?: { name: string; weight: number; isEnabled: boolean }[];
-  };
+  // Global overrides currently defined on the master: presence of the key
+  // (even as `{}`) refreshes the local cache; absence keeps the last one so
+  // mixed-image deploys never wipe state
+  overrides?: Partial<AutomationDbConfig>;
+  roundTargetShare?: number;
+  command?: OrchestratorCommand;
 }
+
+export type OrchestratorCommandHandler = (
+  command: OrchestratorCommand,
+) => Promise<OrchestratorCommandResult>;
 
 const REQUEST_TIMEOUT_MS = 5000;
 const HEARTBEAT_INTERVAL_MS = 15_000;
 
-// Worker-side orchestrator client. When the master is unreachable the client
-// marks itself degraded and the scheduler falls back to fully local behavior
-// (the standalone system that already works today).
+// Worker-side orchestrator client. Each account keeps its own local config
+// and campaign; the master only pushes sparse global overrides (cached here,
+// never written over local values) and per-account commands. When the master
+// is unreachable the client marks itself degraded and the scheduler falls
+// back to fully local behavior, keeping the last cached overrides.
 export class OrchestratorWorkerClient {
   private heartbeatTimer?: ReturnType<typeof setInterval>;
 
@@ -36,17 +45,22 @@ export class OrchestratorWorkerClient {
 
   private hasLoggedRegistered = false;
 
+  private pendingAcks: OrchestratorCommandAck[] = [];
+
   constructor(
     private readonly db: AutomationDatabase,
     private readonly masterUrl: string,
     private readonly workerId: string,
     private readonly workerApiUrl: string,
     private readonly token?: string,
-    private readonly shouldApplyDesiredState = true,
+    private readonly handleCommand?: OrchestratorCommandHandler,
     private readonly heartbeatIntervalMs = HEARTBEAT_INTERVAL_MS,
   ) {}
 
-  static fromEnv(db: AutomationDatabase): OrchestratorWorkerClient | undefined {
+  static fromEnv(
+    db: AutomationDatabase,
+    handleCommand?: OrchestratorCommandHandler,
+  ): OrchestratorWorkerClient | undefined {
     const masterUrl = process.env.MASTER_URL;
     if (!masterUrl) return undefined;
 
@@ -64,6 +78,7 @@ export class OrchestratorWorkerClient {
       workerId,
       workerApiUrl.replace(/\/+$/, ''),
       process.env.ORCHESTRATOR_TOKEN || process.env.AUTOMATION_API_TOKEN,
+      handleCommand,
     );
   }
 
@@ -76,6 +91,7 @@ export class OrchestratorWorkerClient {
     workerId: string,
     workerApiUrl: string,
     heartbeatIntervalMs = HEARTBEAT_INTERVAL_MS,
+    handleCommand?: OrchestratorCommandHandler,
   ): OrchestratorWorkerClient {
     return new OrchestratorWorkerClient(
       db,
@@ -83,7 +99,7 @@ export class OrchestratorWorkerClient {
       workerId,
       (workerApiUrl || daemonUrl).replace(/\/+$/, ''),
       process.env.ORCHESTRATOR_TOKEN || process.env.AUTOMATION_API_TOKEN,
-      false,
+      handleCommand,
       heartbeatIntervalMs,
     );
   }
@@ -116,88 +132,36 @@ export class OrchestratorWorkerClient {
     this.isDegraded = true;
   }
 
-  // Content-only projections so heartbeat syncs don't rewrite rows that
-  // did not actually change (rewrite would churn local template ids)
-  private projectTemplates(templates: { title: string; content: string; weight: number; isEnabled: boolean }[]) {
-    return templates
-      .map((t) => `${t.title}\u0000${t.content}\u0000${t.weight}\u0000${t.isEnabled}`)
-      .join('\u0001');
+  // Global overrides land in the dedicated cache table; the local config
+  // table is never touched, so removing an override restores local behavior
+  private applyGlobalState(response: HeartbeatResponse) {
+    if (!Object.prototype.hasOwnProperty.call(response, 'overrides')) return;
+    this.db.saveOrchestratorCache({
+      overrides: response.overrides || {},
+      roundTargetShare: response.roundTargetShare,
+    });
   }
 
-  private projectLinks(links: { url: string; isEnabled: boolean; destinationIndex?: number }[]) {
-    return links
-      .map((l) => `${l.url}\u0000${l.isEnabled}\u0000${l.destinationIndex ?? ''}`)
-      .join('\u0001');
-  }
-
-  private projectDestinations(destinations: { name: string; weight: number; isEnabled: boolean }[]) {
-    return destinations
-      .map((d) => `${d.name}\u0000${d.weight}\u0000${d.isEnabled}`)
-      .join('\u0001');
-  }
-
-  private applyDesiredCampaign(desired: NonNullable<HeartbeatResponse['desiredCampaign']>) {
-    const current = this.db.getCampaign();
-    // Rows are recreated locally on every sync, so template payloads must be
-    // normalized to content-only: a leaked master-local id would route
-    // `saveCampaignTemplate` through its update path against rows that no
-    // longer exist after the delete step
-    const desiredTemplates = (desired.templates || []).map((template) => ({
-      title: template.title,
-      content: template.content,
-      weight: template.weight,
-      isEnabled: template.isEnabled,
-    }));
-
-    if (desiredTemplates.length) {
-      const desiredLinks = desired.allLinks?.length
-        ? desired.allLinks
-        // Legacy payload: a plain url list means enabled links
-        : (desired.links || []).map((url) => ({ url, isEnabled: true }));
-
-      if (desired.destinations !== undefined) {
-        // New format: destinations included — full content replace, with
-        // links referencing destinations by index (local ids differ from the master's)
-        const destinationIndexById = new Map(
-          current.destinations.map((destination, index) => [destination.id, index]),
-        );
-        const currentLinks = current.allLinks.map((link) => ({
-          url: link.url,
-          isEnabled: link.isEnabled,
-          destinationIndex: link.destinationId !== undefined
-            ? destinationIndexById.get(link.destinationId) : undefined,
-        }));
-
-        const isChanged = this.projectTemplates(current.templates) !== this.projectTemplates(desiredTemplates)
-          || this.projectLinks(currentLinks) !== this.projectLinks(desiredLinks)
-          || this.projectDestinations(current.destinations) !== this.projectDestinations(desired.destinations);
-        if (isChanged) {
-          this.db.replaceCampaignContent(
-            current.id, desiredTemplates, desiredLinks, desired.destinations,
-          );
-        }
-        return;
-      }
-
-      // Legacy multi-template payload from an older master image — local
-      // destinations are preserved, links come back unassigned
-      const isChanged = this.projectTemplates(current.templates) !== this.projectTemplates(desiredTemplates)
-        || this.projectLinks(current.allLinks) !== this.projectLinks(desiredLinks);
-      if (isChanged) {
-        this.db.replaceCampaignContent(current.id, desiredTemplates, desiredLinks);
-      }
-      return;
+  // Commands are idempotent on the executor (start when running is a no-op,
+  // stop when stopped is a no-op, campaign copy replaces content), so a lost
+  // ack followed by re-delivery is harmless
+  private async executeCommand(command: OrchestratorCommand): Promise<OrchestratorCommandAck> {
+    const at = Math.floor(Date.now() / 1000);
+    if (!this.handleCommand) {
+      return { id: command.id, ok: false, error: 'No command handler configured', at };
     }
-
-    // Legacy single-template payload from an older master image
-    if (desired.spintaxTemplate) {
-      const desiredLinks = (desired.links || []).map((url) => ({ url, isEnabled: true }));
-      const isChanged = current.spintaxTemplate !== desired.spintaxTemplate
-        || this.projectLinks(current.allLinks) !== this.projectLinks(desiredLinks);
-      if (isChanged) {
-        this.db.saveCampaign(desired.spintaxTemplate, desired.links || []);
-      }
+    let ack: OrchestratorCommandAck;
+    try {
+      const result = await this.handleCommand(command);
+      ack = { id: command.id, ...result, at };
+    } catch (err: any) {
+      ack = { id: command.id, ok: false, error: err?.message || String(err), at };
     }
+    // eslint-disable-next-line no-console
+    console.log(
+      `[Interdivu Orchestrator] Command '${command.type}' ${ack.ok ? 'executed' : `failed: ${ack.error}`}`,
+    );
+    return ack;
   }
 
   startHeartbeatLoop(getStatus: () => Record<string, unknown>) {
@@ -211,16 +175,16 @@ export class OrchestratorWorkerClient {
           apiUrl: this.workerApiUrl,
           groups,
           status: getStatus(),
+          commandAcks: this.pendingAcks,
         }) as HeartbeatResponse;
 
         this.markHealthy();
-        if (this.shouldApplyDesiredState) {
-          if (response.desiredConfig) {
-            this.db.updateConfig(response.desiredConfig);
-          }
-          if (response.desiredCampaign) {
-            this.applyDesiredCampaign(response.desiredCampaign);
-          }
+        this.applyGlobalState(response);
+        // The master consumes acks while building this response, so whatever
+        // is still listed as pending here was issued after our request
+        this.pendingAcks = [];
+        if (response.command) {
+          this.pendingAcks.push(await this.executeCommand(response.command));
         }
       } catch (err: any) {
         this.markDegraded(`heartbeat failed: ${err?.message || err}`);

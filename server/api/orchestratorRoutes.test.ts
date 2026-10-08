@@ -1,6 +1,8 @@
 import http from 'node:http';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import type { OrchestratorCommand } from '../orchestrator/coordinator';
+
 import { AutomationScheduler } from '../automation/scheduler';
 import { TelegramRunner } from '../automation/telegramRunner';
 import { AutomationDatabase } from '../db/database';
@@ -58,33 +60,18 @@ describe('Orchestrator REST API', () => {
     });
     expect(registered.status).toBe(200);
 
+    // The old full config/campaign push is gone; only the sparse global
+    // overrides key is always present
     const heartbeat = await api('heartbeat', {
       method: 'POST',
       body: JSON.stringify({ workerId: 'w1', apiUrl: 'http://w1.local', groups: ['-1'], status: { todaySent: 3 } }),
     });
     expect(heartbeat.status).toBe(200);
-    expect(heartbeat.data.desiredConfig).toBeDefined();
-    expect(heartbeat.data.desiredCampaign).toBeDefined();
-    // Destinations sync by index so workers map them to their own local ids
-    expect(heartbeat.data.desiredCampaign.destinations).toEqual([]);
-    expect(heartbeat.data.desiredCampaign.allLinks).toEqual([]);
-
-    // Content with destinations arrives as index-based projections
-    const campaignId = ctx.db.getCampaign().id;
-    const destination = ctx.db.saveDestination({ campaignId, name: 'Grupo Sync', weight: 2 });
-    ctx.db.saveCampaignLink({ campaignId, url: 'https://t.me/sync', destinationId: destination.id });
-
-    const syncedHeartbeat = await api('heartbeat', {
-      method: 'POST',
-      body: JSON.stringify({
-        workerId: 'w1', apiUrl: 'http://w1.local', groups: ['-1'], status: { todaySent: 3 },
-      }),
-    });
-    const desired = syncedHeartbeat.data.desiredCampaign;
-    expect(desired.destinations).toEqual([{ name: 'Grupo Sync', weight: 2, isEnabled: true }]);
-    expect(desired.allLinks).toEqual([
-      { url: 'https://t.me/sync', isEnabled: true, destinationIndex: 0 },
-    ]);
+    expect(heartbeat.data.overrides).toEqual({});
+    expect('desiredConfig' in heartbeat.data).toBe(false);
+    expect('desiredCampaign' in heartbeat.data).toBe(false);
+    expect(heartbeat.data.roundTargetShare).toBeUndefined();
+    expect(heartbeat.data.command).toBeUndefined();
 
     const claim = await api('claim', {
       method: 'POST',
@@ -109,6 +96,167 @@ describe('Orchestrator REST API', () => {
     expect(grants.data[0].result).toBe('success');
   });
 
+  it('global overrides are defined, pushed and cleared from the panel API', async () => {
+    const defined = await api('overrides', {
+      method: 'PUT',
+      body: JSON.stringify({ set: { minDelaySeconds: 90, roundTargetSends: 40 } }),
+    });
+    expect(defined.status).toBe(200);
+    expect(defined.data.overrides).toEqual({ minDelaySeconds: 90, roundTargetSends: 40 });
+
+    // A live worker receives the overrides plus its rebalanced share of the
+    // global round target
+    const heartbeat = await api('heartbeat', {
+      method: 'POST',
+      body: JSON.stringify({ workerId: 'w1', apiUrl: 'http://w1.local', groups: ['-1'] }),
+    });
+    expect(heartbeat.data.overrides).toEqual({ minDelaySeconds: 90, roundTargetSends: 40 });
+    expect(heartbeat.data.roundTargetShare).toBe(40);
+
+    // Without a global target every account keeps its own local round target
+    const cleared = await api('overrides', {
+      method: 'PUT',
+      body: JSON.stringify({ clear: ['roundTargetSends'] }),
+    });
+    expect(cleared.status).toBe(200);
+    expect(cleared.data.overrides).toEqual({ minDelaySeconds: 90 });
+
+    const afterClear = await api('heartbeat', {
+      method: 'POST',
+      body: JSON.stringify({ workerId: 'w1', apiUrl: 'http://w1.local', groups: ['-1'] }),
+    });
+    expect(afterClear.data.roundTargetShare).toBeUndefined();
+
+    // Unknown worker means no share either
+    expect((await api('overrides')).data.overrides).toEqual({ minDelaySeconds: 90 });
+
+    // Cleanup so the other flows in this file start from a clean slate
+    await api('overrides', { method: 'PUT', body: JSON.stringify({ clear: ['minDelaySeconds'] }) });
+  });
+
+  it('rejects invalid override patches', async () => {
+    const unknownField = await api('overrides', {
+      method: 'PUT',
+      body: JSON.stringify({ set: { notAField: 1 } }),
+    });
+    expect(unknownField.status).toBe(400);
+
+    const wrongType = await api('overrides', {
+      method: 'PUT',
+      body: JSON.stringify({ set: { minDelaySeconds: 'fast' } }),
+    });
+    expect(wrongType.status).toBe(400);
+
+    const badMode = await api('overrides', {
+      method: 'PUT',
+      body: JSON.stringify({ set: { mode: 'turbo' } }),
+    });
+    expect(badMode.status).toBe(400);
+
+    const negative = await api('overrides', {
+      method: 'PUT',
+      body: JSON.stringify({ set: { dailyLimit: -1 } }),
+    });
+    expect(negative.status).toBe(400);
+
+    const badWindow = await api('overrides', {
+      method: 'PUT',
+      body: JSON.stringify({ set: { sleepWindowStart: '25:99' } }),
+    });
+    expect(badWindow.status).toBe(400);
+
+    const badClear = await api('overrides', {
+      method: 'PUT',
+      body: JSON.stringify({ clear: ['nope'] }),
+    });
+    expect(badClear.status).toBe(400);
+  });
+
+  it('delivers commands through heartbeats and records the ack', async () => {
+    await api('register', {
+      method: 'POST',
+      body: JSON.stringify({ workerId: 'w9', apiUrl: 'http://w9.local', groups: ['-2'] }),
+    });
+
+    const unknownWorker = await api('workers/command', {
+      method: 'POST',
+      body: JSON.stringify({ workerId: 'ghost', type: 'start' }),
+    });
+    expect(unknownWorker.status).toBe(404);
+
+    const badType = await api('workers/command', {
+      method: 'POST',
+      body: JSON.stringify({ workerId: 'w9', type: 'explode' }),
+    });
+    expect(badType.status).toBe(400);
+
+    const badPayload = await api('workers/command', {
+      method: 'POST',
+      body: JSON.stringify({ workerId: 'w9', type: 'campaign-copy', payload: { nope: true } }),
+    });
+    expect(badPayload.status).toBe(400);
+
+    const validCopy = await api('workers/command', {
+      method: 'POST',
+      body: JSON.stringify({
+        workerId: 'w9',
+        type: 'campaign-copy',
+        payload: {
+          templates: [{ title: 'P', content: 'oi {link}' }],
+          links: [{ url: 'https://t.me/x', isEnabled: true }],
+          destinations: [{ name: 'D1', weight: 1, isEnabled: true }],
+        },
+      }),
+    });
+    expect(validCopy.status).toBe(200);
+    const commandId = validCopy.data.command.id;
+
+    // The next heartbeat delivers the pending command exactly once
+    const delivered = await api('heartbeat', {
+      method: 'POST',
+      body: JSON.stringify({ workerId: 'w9', apiUrl: 'http://w9.local', groups: ['-2'] }),
+    });
+    expect(delivered.data.command).toMatchObject({ id: commandId, type: 'campaign-copy' });
+
+    // The ack on the following heartbeat closes the command
+    const acked = await api('heartbeat', {
+      method: 'POST',
+      body: JSON.stringify({
+        workerId: 'w9',
+        apiUrl: 'http://w9.local',
+        groups: ['-2'],
+        commandAcks: [{ id: commandId, ok: true, message: 'applied' }],
+      }),
+    });
+    expect(acked.data.command).toBeUndefined();
+
+    const workers = await api('workers');
+    const w9 = (workers.data as any[]).find((worker) => worker.workerId === 'w9');
+    expect(w9.pendingCommand).toBeUndefined();
+    expect(w9.lastCommandAck).toMatchObject({ id: commandId, ok: true });
+
+    // A stale command never fires when the account comes back online
+    const start = await api('workers/command', {
+      method: 'POST',
+      body: JSON.stringify({ workerId: 'w9', type: 'start' }),
+    });
+    expect(start.status).toBe(200);
+    ctx.db.rawDb().prepare(
+      `UPDATE orchestrator_workers SET pending_command_json = ?
+       WHERE worker_id = 'w9'`,
+    ).run(JSON.stringify({ ...start.data.command, issuedAt: Math.floor(Date.now() / 1000) - 600 }));
+
+    const expired = await api('heartbeat', {
+      method: 'POST',
+      body: JSON.stringify({ workerId: 'w9', apiUrl: 'http://w9.local', groups: ['-2'] }),
+    });
+    expect(expired.data.command).toBeUndefined();
+
+    const workersAfterExpiry = await api('workers');
+    const w9After = (workersAfterExpiry.data as any[]).find((worker) => worker.workerId === 'w9');
+    expect(w9After.lastCommandAck).toMatchObject({ ok: false, error: 'Command expired before execution' });
+  });
+
   it('info is not exposed on workers', async () => {
     const workerCtx = await startServer(false);
     try {
@@ -121,7 +269,7 @@ describe('Orchestrator REST API', () => {
   });
 });
 
-describe('Master self-registration and desired-state application', () => {
+describe('Master self-registration, override cache and command execution', () => {
   let ctx: Awaited<ReturnType<typeof startServer>>;
   const TEST_HEARTBEAT_MS = 25;
 
@@ -134,10 +282,15 @@ describe('Master self-registration and desired-state application', () => {
     ctx.server.close();
   });
 
-  it('self-registers the master without rewriting its own config, while real workers sync', async () => {
-    // Master runs with a lower global target than the worker default (23) so
-    // the desired-state push is observable
-    ctx.db.updateConfig({ roundTargetSends: 7 });
+  it('keeps local configs pristine while global overrides and shares drive the effective config', async () => {
+    // Define a global rhythm plus a global round target (7 → 4/3 across the
+    // two accounts that register below)
+    const res = await fetch(`http://127.0.0.1:${ctx.port}/api/v1/orchestrator/overrides`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ set: { roundTargetSends: 7, minDelaySeconds: 90 } }),
+    });
+    expect(res.status).toBe(200);
 
     const selfDb = new AutomationDatabase(':memory:');
     const workerDb = new AutomationDatabase(':memory:');
@@ -152,34 +305,22 @@ describe('Master self-registration and desired-state application', () => {
     });
 
     const masterUrl = `http://127.0.0.1:${ctx.port}`;
+    const executedCommands: OrchestratorCommand[] = [];
     const selfClient = OrchestratorWorkerClient.createSelf(
       selfDb, masterUrl, 'master-self', 'http://master.local:8090', TEST_HEARTBEAT_MS,
     );
     const workerClient = new OrchestratorWorkerClient(
-      workerDb, masterUrl, 'worker-2', 'http://worker.local:8091', undefined, true, TEST_HEARTBEAT_MS,
+      workerDb,
+      masterUrl,
+      'worker-2',
+      'http://worker.local:8091',
+      undefined,
+      (command) => {
+        executedCommands.push(command);
+        return Promise.resolve({ ok: true, message: 'handled' });
+      },
+      TEST_HEARTBEAT_MS,
     );
-
-    // Master carries real campaign content so the worker exercises the full
-    // desired-campaign apply path (template rows are recreated locally)
-    const masterCampaignId = ctx.db.getCampaign().id;
-    ctx.db.saveCampaignTemplate({
-      campaignId: masterCampaignId,
-      title: 'Principal',
-      content: 'Olá {link}',
-      weight: 3,
-      isEnabled: true,
-    });
-    const masterDestination = ctx.db.saveDestination({
-      campaignId: masterCampaignId,
-      name: 'Grupo Alvo',
-      weight: 2,
-    });
-    ctx.db.saveCampaignLink({
-      campaignId: masterCampaignId,
-      url: 'https://t.me/promo',
-      isEnabled: true,
-      destinationId: masterDestination.id,
-    });
 
     selfClient.startHeartbeatLoop(() => ({ todaySent: 0 }));
     workerClient.startHeartbeatLoop(() => ({ todaySent: 0 }));
@@ -190,26 +331,26 @@ describe('Master self-registration and desired-state application', () => {
       expect(reader.getWorker('worker-2')).toBeDefined();
     });
 
-    // The real worker adopts its rebalanced share of the master's target
+    // The worker caches the pushed overrides and its rebalanced share; the
+    // local config table is never touched (23 is the seeded default)
     await vi.waitFor(() => {
-      expect(workerDb.getConfig().roundTargetSends).toBe(3);
+      expect(workerDb.getEffectiveConfig().roundTargetSends).toBe(3);
+      expect(workerDb.getEffectiveConfig().minDelaySeconds).toBe(90);
     });
+    expect(workerDb.getConfig().roundTargetSends).toBe(23);
+    expect(workerDb.getConfig().minDelaySeconds).not.toBe(90);
+    expect(workerDb.getOverriddenFields()).toEqual(
+      expect.arrayContaining(['minDelaySeconds', 'roundTargetSends']),
+    );
 
-    // The self-registration never applies desired state back onto the master
+    // The self-registration consumes the same protocol: its own share drives
+    // its effective config while its local values stay intact
+    await vi.waitFor(() => {
+      expect(selfDb.getEffectiveConfig().roundTargetSends).toBe(4);
+      expect(selfDb.getEffectiveConfig().minDelaySeconds).toBe(90);
+    });
     expect(selfDb.getConfig().roundTargetSends).toBe(23);
-
-    // The worker adopts the master's campaign content, rebinding links to
-    // its own local destination ids, and stays healthy while doing so
-    await vi.waitFor(() => {
-      const synced = workerDb.getCampaign();
-      expect(synced.destinations.map((destination) => destination.name)).toEqual(['Grupo Alvo']);
-      expect(synced.templates.some((template) => template.title === 'Principal')).toBe(true);
-      expect(synced.allLinks[0].url).toBe('https://t.me/promo');
-      expect(synced.allLinks[0].destinationId).toBeDefined();
-    });
-    expect(workerClient.getIsDegraded()).toBe(false);
     expect(selfClient.getIsDegraded()).toBe(false);
-    expect(selfDb.getCampaign().destinations).toEqual([]);
 
     // Rebalance splits the global target across the two alive accounts
     await vi.waitFor(() => {
@@ -223,7 +364,62 @@ describe('Master self-registration and desired-state application', () => {
 
     selfClient.stopHeartbeatLoop();
     workerClient.stopHeartbeatLoop();
+
+    // The cached overrides survive a degraded period: effective config keeps
+    // honoring the global rhythm even with the master unreachable
+    expect(workerDb.getEffectiveConfig().minDelaySeconds).toBe(90);
+    expect(workerDb.getEffectiveConfig().roundTargetSends).toBe(3);
+
     selfDb.close();
+    workerDb.close();
+  });
+
+  it('executes a start command issued from the panel and acks it end-to-end', async () => {
+    const workerDb = new AutomationDatabase(':memory:');
+    const masterUrl = `http://127.0.0.1:${ctx.port}`;
+    const executedCommands: OrchestratorCommand[] = [];
+    const workerClient = new OrchestratorWorkerClient(
+      workerDb,
+      masterUrl,
+      'worker-3',
+      'http://worker.local:8093',
+      undefined,
+      (command) => {
+        executedCommands.push(command);
+        return Promise.resolve({ ok: true, message: 'started' });
+      },
+      TEST_HEARTBEAT_MS,
+    );
+    workerClient.startHeartbeatLoop(() => ({ todaySent: 0 }));
+
+    await vi.waitFor(() => {
+      expect(new OrchestratorCoordinator(ctx.db).getWorker('worker-3')).toBeDefined();
+    });
+
+    const issued = await fetch(`http://127.0.0.1:${ctx.port}/api/v1/orchestrator/workers/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workerId: 'worker-3', type: 'start' }),
+    });
+    const issuedData = await issued.json() as { command: { id: string } };
+    expect(issued.status).toBe(200);
+
+    // The worker executes the pending command on its next heartbeat
+    await vi.waitFor(() => {
+      expect(executedCommands.map((command) => command.type)).toContain('start');
+    });
+    expect(executedCommands[0].id).toBe(issuedData.command.id);
+
+    // ...and the ack on the following heartbeat closes it on the master
+    await vi.waitFor(async () => {
+      const workersRes = await fetch(`http://127.0.0.1:${ctx.port}/api/v1/orchestrator/workers`);
+      const workers = await workersRes.json() as any[];
+      const worker = workers.find((entry) => entry.workerId === 'worker-3');
+      expect(worker.pendingCommand).toBeUndefined();
+      expect(worker.lastCommandAck).toMatchObject({ id: issuedData.command.id, ok: true });
+    });
+
+    workerClient.stopHeartbeatLoop();
     workerDb.close();
   });
 });

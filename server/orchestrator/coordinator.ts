@@ -12,7 +12,28 @@ export interface OrchestratorWorkerRecord {
   metaTarget?: number;
   lastHeartbeatAt: number;
   registeredAt: number;
+  pendingCommand?: OrchestratorCommand;
+  lastCommandAck?: OrchestratorCommandAck;
 }
+
+// Command issued from the orchestration panel, delivered through the
+// heartbeat response and acknowledged on the next worker heartbeat
+export interface OrchestratorCommand {
+  id: string;
+  type: 'start' | 'stop' | 'campaign-copy';
+  payload?: unknown;
+  issuedAt: number;
+}
+
+export interface OrchestratorCommandAck {
+  id: string;
+  ok: boolean;
+  message?: string;
+  error?: string;
+  at: number;
+}
+
+export type OrchestratorCommandResult = Pick<OrchestratorCommandAck, 'ok' | 'message' | 'error'>;
 
 export interface GrantRecord {
   id?: number;
@@ -32,6 +53,7 @@ const HEARTBEAT_TTL_SECONDS = 45;
 const LOCK_TTL_SECONDS = 90;
 const DEFAULT_RESEND_GAP_SECONDS = 600; // global floor between sends to the same group
 const GROUP_FLOOD_COOLDOWN_SECONDS = 3600;
+const COMMAND_TTL_SECONDS = 120;
 
 // Allocates send slots globally: per-group timeline so two accounts never send
 // to the same group too close together, plus round-robin across workers so
@@ -94,6 +116,65 @@ export class OrchestratorCoordinator {
     this.dbRaw().prepare(
       'UPDATE orchestrator_workers SET meta_target = ? WHERE worker_id = ?',
     ).run(metaTarget, workerId);
+  }
+
+  // A global round target only exists while the master defines one; without
+  // it every account falls back to its own local target
+  clearMetaTargets() {
+    this.dbRaw().prepare(
+      'UPDATE orchestrator_workers SET meta_target = NULL WHERE meta_target IS NOT NULL',
+    ).run();
+  }
+
+  // ---- Pending command channel ----
+
+  setPendingCommand(workerId: string, command: OrchestratorCommand): boolean {
+    if (!this.getWorker(workerId)) return false;
+    this.dbRaw().prepare(
+      'UPDATE orchestrator_workers SET pending_command_json = ? WHERE worker_id = ?',
+    ).run(JSON.stringify(command), workerId);
+    return true;
+  }
+
+  // Returns the pending command for a worker, expiring stale ones so a
+  // long-dead command never fires when the account comes back online
+  takePendingCommand(workerId: string, serverNow: number): OrchestratorCommand | undefined {
+    const worker = this.getWorker(workerId);
+    if (!worker?.pendingCommand) return undefined;
+    if (serverNow - worker.pendingCommand.issuedAt > COMMAND_TTL_SECONDS) {
+      this.dbRaw().prepare(
+        'UPDATE orchestrator_workers SET pending_command_json = ?, last_command_ack_json = ? WHERE worker_id = ?',
+      ).run(
+        null,
+        JSON.stringify({
+          id: worker.pendingCommand.id,
+          ok: false,
+          error: 'Command expired before execution',
+          at: serverNow,
+        }),
+        workerId,
+      );
+      return undefined;
+    }
+    return worker.pendingCommand;
+  }
+
+  ackCommand(workerId: string, ack: OrchestratorCommandAck) {
+    const worker = this.getWorker(workerId);
+    if (!worker) return;
+    const acked = { ...ack, at: ack.at || Math.floor(Date.now() / 1000) };
+    // The pending command is cleared when the ack matches; an ack for an
+    // unknown id leaves any newer command untouched
+    const remainingPending = worker.pendingCommand?.id === ack.id
+      ? undefined
+      : worker.pendingCommand;
+    this.dbRaw().prepare(
+      'UPDATE orchestrator_workers SET last_command_ack_json = ?, pending_command_json = ? WHERE worker_id = ?',
+    ).run(
+      JSON.stringify(acked),
+      remainingPending ? JSON.stringify(remainingPending) : null,
+      workerId,
+    );
   }
 
   // Pure scheduling decision, exposed for testing
@@ -265,6 +346,18 @@ export class OrchestratorCoordinator {
   }
 
   private mapWorker(row: any): OrchestratorWorkerRecord {
+    let pendingCommand: OrchestratorCommand | undefined;
+    try {
+      pendingCommand = row.pending_command_json ? JSON.parse(row.pending_command_json) : undefined;
+    } catch {
+      pendingCommand = undefined;
+    }
+    let lastCommandAck: OrchestratorCommandAck | undefined;
+    try {
+      lastCommandAck = row.last_command_ack_json ? JSON.parse(row.last_command_ack_json) : undefined;
+    } catch {
+      lastCommandAck = undefined;
+    }
     return {
       workerId: String(row.worker_id),
       apiUrl: String(row.api_url),
@@ -274,6 +367,8 @@ export class OrchestratorCoordinator {
       metaTarget: row.meta_target !== null && row.meta_target !== undefined ? Number(row.meta_target) : undefined,
       lastHeartbeatAt: Number(row.last_heartbeat_at ?? 0),
       registeredAt: Number(row.registered_at),
+      pendingCommand,
+      lastCommandAck,
     };
   }
 
