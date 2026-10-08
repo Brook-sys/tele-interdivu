@@ -67,7 +67,7 @@ async function handleOrchestratorCommand(command: OrchestratorCommand): Promise<
     if (scheduler.getState().status === 'STOPPED') {
       return { ok: true, message: 'Automation was already stopped' };
     }
-    await stopAutomation(runner, scheduler);
+    await stopAutomation(db, runner, scheduler);
     return { ok: true, message: 'Automation stopped' };
   }
 
@@ -167,15 +167,40 @@ server.listen(PORT, '127.0.0.1', () => {
   });
 });
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
+// Graceful shutdown: Docker sends SIGTERM on stop/recreate and SIGKILLs ~10s
+// later. Releasing the Telegram socket here is the one step that must not
+// die abruptly — a killed connection makes the server hold the auth key "in
+// use", and reconnecting inside that window destroys the session
+// (AUTH_KEY_DUPLICATED, postmortem 72). The reconnect cooldown in the API
+// layer covers everything this handler cannot finish in time
+function shutdown() {
   // eslint-disable-next-line no-console
   console.log('[Interdivu] Shutting down daemon...');
-  workerClient?.stopHeartbeatLoop();
-  scheduler.stop();
-  await runner.stop();
-  db.close();
-  server.close(() => {
+  // Safety net for anything below hanging: never let Docker's SIGKILL be the
+  // thing that ends the process
+  const forceExitTimer = setTimeout(() => process.exit(0), 3000);
+  forceExitTimer.unref();
+  try {
+    workerClient?.stopHeartbeatLoop();
+  } catch {
+    // Best-effort shutdown
+  }
+  try {
+    scheduler.stop();
+  } catch {
+    // Best-effort shutdown
+  }
+  void runner.stop().then(() => {
+    try {
+      db.close();
+    } catch {
+      // Best-effort shutdown
+    }
+    // Keep-alive HTTP connections keep server.close pending forever, so the
+    // process exits on its own instead of waiting for them to drain
     process.exit(0);
   });
-});
+}
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);

@@ -133,6 +133,17 @@ export function getIsPermanentParticipantError(message: string): boolean {
     .test(message) || /CHAT_RESTRICTED|USER_DEACTIVATED_BAN/.test(message);
 }
 
+// Persisted state keys read by the API layer to enforce the reconnect
+// cooldown: reconnecting with the auth key while the Telegram server may
+// still consider it occupied triggers AUTH_KEY_DUPLICATED, which destroys
+// the session permanently (postmortem 72)
+export const SESSION_LAST_ALIVE_KEY = 'session-last-alive-at';
+export const SESSION_USER_RELEASED_KEY = 'session-user-released-at';
+
+// How often the "last alive" marker is refreshed while the session is
+// connected, so the cooldown measures the real moment the session ended
+const SESSION_ALIVE_MARKER_INTERVAL_MS = 30_000;
+
 // Identity of the signed-in account, captured at connect time and reported to
 // the orchestration panel
 export interface AccountInfo {
@@ -143,6 +154,8 @@ export interface AccountInfo {
 
 export class TelegramRunner {
   private client?: TelegramClient;
+
+  private sessionAliveTimer?: ReturnType<typeof setInterval>;
 
   private readonly resolveGuard = new ResolveGuard();
 
@@ -255,6 +268,12 @@ export class TelegramRunner {
     }
     this.client = client;
 
+    this.markSessionAlive();
+    this.sessionAliveTimer = setInterval(
+      () => this.markSessionAlive(),
+      SESSION_ALIVE_MARKER_INTERVAL_MS,
+    );
+
     // Identity is cosmetic for sending but required by the orchestration
     // panel, so capture it in the background without blocking the start
     void this.captureAccountInfo();
@@ -272,7 +291,15 @@ export class TelegramRunner {
   }
 
   stop(): Promise<void> {
+    if (this.sessionAliveTimer) {
+      clearInterval(this.sessionAliveTimer);
+      this.sessionAliveTimer = undefined;
+    }
     if (this.client) {
+      // Stamp the exact moment this process released the session: after an
+      // abrupt end (crash, SIGKILL, container recreate) it is the only
+      // trace of how long the auth key may still look "in use" to Telegram
+      this.markSessionAlive();
       try {
         this.client.disconnect();
       } catch {
@@ -281,6 +308,10 @@ export class TelegramRunner {
       this.client = undefined;
     }
     return Promise.resolve();
+  }
+
+  private markSessionAlive() {
+    this.db.saveStateJson(SESSION_LAST_ALIVE_KEY, Math.floor(Date.now() / 1000));
   }
 
   private handleUpdate(update: any) {

@@ -15,6 +15,7 @@ import {
 import { addActionHandler, getGlobal, setGlobal } from '../../index';
 import { INITIAL_GLOBAL_STATE } from '../../initialState';
 import { clearPasscodeSettings, updatePasscodeSettings } from '../../reducers';
+import { resumeBrowserClientConnection } from './initial';
 
 let noLockOnUnload = false;
 onBeforeUnload(() => {
@@ -107,7 +108,9 @@ addActionHandler('unlockScreen', (global, actions, payload): ActionReturnType =>
 
   beforeTabStates.forEach(({ id: tabId, isMasterTab }) => actions.init({ tabId, isMasterTab }));
   beforeTabStates.forEach(({ id: tabId }) => actions.setIsUiReady({ uiReadyState: 2, tabId }));
-  actions.initApi();
+  // The daemon may own the session (automation running) or the session key
+  // may still be unsafe to use — the shared decision flow handles both
+  void resumeBrowserClientConnection();
 });
 
 const MAX_INVALID_ATTEMPTS = 5;

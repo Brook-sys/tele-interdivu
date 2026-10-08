@@ -691,16 +691,53 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     durante comando pendente) em vez dos dois botões sempre visíveis
     (274/274).
 
-72. **Client GramJS órfão após connect com falha — AUTH_KEY_DUPLICATED
-    permanente** — Descoberto ao vivo no deploy do item 71: o redeploy matou
-    os containers com as sessões CONECTADAS (automações rodando desde o
-    armê), e o primeiro `start` do processo novo recebeu `AUTH_KEY_DUPLICATED`
-    (a key ainda "viva" no DC após o kill abrupto). O defeito agravante:
-    `runner.start()` não limpava o client quando `client.connect()` lançava
-    — o socket ficava **órfão e vivo**, reconectando em loop para sempre, o
-    que mantinha a auth key perpetuamente "em uso" e envenenava todos os
-    retries seguintes até reiniciar o container. Correção: disconnect no
-    catch do connect (o erro segue subindo para o executor/ack, mas sem
-    deixar o órfão). Runbook de deploy: parar as automações (release limpo)
-    antes de recriar containers; com o fix, um redeploy com automação viva
-    se auto-cura após o DC liberar a key.
+72. **Sessões destruídas por AUTH_KEY_DUPLICATED após redeploy — logout das
+    duas contas (incidente real)** — O redeploy via webhook (10:39Z) matou os
+    containers com as duas sessões CONECTADAS (automações armadas desde
+    10:03Z). ~70s depois, o primeiro re-arm da account-1 recebeu
+    `AUTH_KEY_DUPLICATED`; a sessão da account-2 foi destruída na reconexão do
+    próprio navegador (hand-back do modo automação) dentro da janela em que o
+    servidor ainda via a conexão morta como "em uso" — piorada pelo proxy da
+    conta 2, que pode manter o upstream aberto mesmo após o FIN. O 406 não é
+    transitório: o Telegram **invalida a chave** — as duas contas precisaram
+    logar de novo. Três brechas somadas: (a) o handler de SIGTERM existia,
+    mas travava em `server.close()` com keep-alive do nginx até o SIGKILL do
+    Docker; (b) o hand-back do navegador reconectava sem nenhuma noção de
+    janela (boot, desbloqueio de passcode e "Voltar ao chat"); (c) o re-arm
+    remoto não respeitava janela alguma — e podia colidir com um navegador
+    que já tivesse retomado a sessão. Correções (defesa em camadas):
+    SIGTERM/SIGINT robusto (desconecta o client, fecha o DB e sai em <1s, com
+    rede de força de 3s — sem esperar o drain do HTTP); marcadores
+    persistidos `session-last-alive-at` (tick de 30s conectado) e
+    `session-user-released-at` (todo release via API); cooldown de 180s
+    divulgado no status (`sessionSafetyWaitSeconds`) e ENFORCADO em três
+    pontos — start do daemon (recusa com mensagem), boot/unlock do navegador
+    (initApi espera zerar) e saída do modo automação (estaciona com countdown;
+    daemon morto → o navegador conta a mesma janela a partir do último poll
+    que viu `isTelegramConnected`); watcher global de takeover (poll de 15s:
+    cliente local conectado + daemon conectado → entrega a sessão e entra no
+    modo automação, espelhando o handover do painel local, historicamente
+    seguro). Revisão do design revelou que o gatilho do 406 é o uso
+    concorrente SUSTENTADO da mesma key (~segundos a dezenas de segundos) —
+    o painel local sobrevive há semanas porque sua sobreposição dura 1-3s
+    e o browser se desconecta logo em seguida, mas um arm remoto com o
+    navegador vivo sustentaria a sobreposição indefinidamente. Logo o
+    watcher sozinho não bastaria: foi adicionada **presença de browser** —
+    o app POSTa `browser-presence` a cada 5s com `isClientConnected`, e todo
+    start REMOTO (takeover vazio ou comando do orquestrador) é recusado com
+    "the account is open in a web browser" enquanto houver sinal recente
+    (≤120s, cobrindo abas em background com timer throttado pelo browser e
+    abas recém-fechadas); o handover coordenado (takeover COM `sessionData`
+    — painel local e "Reconectar" do modo automação, que desconectam o
+    browser logo após a confirmação) segue liberado; o `handleReconnect`
+    do modo automação agora também desconecta o client do browser após o
+    takeover (caso pós-relogin). `AUTH_KEY_DUPLICATED` vira falha
+    estruturada com instrução de relogin; e o catch do connect não deixa
+    client órfão (fix prévio da parte 1 deste item, mantido). Runbook:
+    redeploy com automação armada agora é seguro; após crash/OOM, aguardar o
+    countdown que a UI mostra antes de armar/navegar; para armar remotamente
+    a interface da conta precisa estar fechada ou no modo automação (o
+    daemon recusa e explica no ack). Testes: 12 em `sessionSafety.test.ts`
+    (286/286). Backlog de hardening (exige decisão de produto): autorizações
+    separadas por client (browser e daemon com keys próprias) eliminaria a
+    fragilidade da key compartilhada.

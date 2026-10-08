@@ -3297,6 +3297,7 @@
 "AutomationModeLostText" = "A automação parou de responder ou a sessão foi reconectada em outro lugar. Você pode reconectar sem perder configurações, ou voltar ao chat.";
 "AutomationModeReconnect" = "Reconectar";
 "AutomationModeBackToChat" = "Voltar ao chat";
+"AutomationModeSessionWait" = "Aguardando o Telegram liberar a sessão para reconectar com segurança ({seconds}s)";
 "AutomationModeStepTakeover" = "Entregando sessão ao daemon…";
 "AutomationModeStepDaemon" = "Daemon confirmou a conexão";
 "AutomationModeStepDisconnect" = "Desconectando o visualizador";

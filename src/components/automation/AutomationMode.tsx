@@ -12,6 +12,7 @@ import {
   stopAutomationRelease,
 } from '../../util/promo/automationApi';
 import { loadStoredSession } from '../../util/sessions';
+import { callApi } from '../../api/gramjs';
 
 import useFlag from '../../hooks/useFlag';
 import useHistoryBack from '../../hooks/useHistoryBack';
@@ -48,6 +49,11 @@ const INTRO_STEPS: {
 const INTRO_STEP_MS = 650;
 const POLL_INTERVAL_MS = 10_000;
 const POLL_FAILURE_THRESHOLD = 3;
+// Same window the daemon enforces: when the daemon dies holding a connected
+// session, the Telegram server can keep the auth key "in use" for a while
+// (proxies hold the upstream even longer) — reconnecting inside that window
+// triggers AUTH_KEY_DUPLICATED and destroys the session (postmortem 72)
+const SESSION_RECONNECT_COOLDOWN_MS = 180_000;
 
 const AutomationMode = ({ showIntroTransition }: StateProps) => {
   const { consumeAutomationIntroTransition, deactivateAutomationMode, initApi } = getActions();
@@ -56,10 +62,14 @@ const AutomationMode = ({ showIntroTransition }: StateProps) => {
   const [introStep, setIntroStep] = useState<IntroStep>(showIntroTransition ? 'takeover' : 'done');
   const [isDaemonFailed, markDaemonFailed, unmarkDaemonFailed] = useFlag();
   const [isRecovering, startRecovering, stopRecovering] = useFlag();
+  const [isPendingBack, markPendingBack, unmarkPendingBack] = useFlag();
   const [failedAt, setFailedAt] = useState<string>();
+  const [sessionWaitSeconds, setSessionWaitSeconds] = useState<number>();
+  const [reconnectError, setReconnectError] = useState<string>();
 
   const statusRef = useRef<AutomationStatusResponse>();
   const failStreakRef = useRef(0);
+  const lastConnectedSeenAtRef = useRef<number>();
 
   const lang = useLang();
 
@@ -91,6 +101,9 @@ const AutomationMode = ({ showIntroTransition }: StateProps) => {
     try {
       const status = await fetchAutomationStatus();
       statusRef.current = status;
+      if (status.isTelegramConnected) {
+        lastConnectedSeenAtRef.current = Date.now();
+      }
       failStreakRef.current = 0;
       unmarkDaemonFailed();
     } catch {
@@ -112,6 +125,50 @@ const AutomationMode = ({ showIntroTransition }: StateProps) => {
     return () => window.clearInterval(interval);
   }, [introStep]);
 
+  // Remaining seconds the session key is unsafe to use: trust the daemon's
+  // own cooldown while it is reachable; when it is gone entirely, count the
+  // same window from the last poll that saw the session connected — the
+  // daemon died holding it
+  const fetchSessionWaitSeconds = useLastCallback(async (): Promise<number> => {
+    try {
+      const status = await fetchAutomationStatus();
+      statusRef.current = status;
+      if (status.isTelegramConnected) {
+        lastConnectedSeenAtRef.current = Date.now();
+        return 0;
+      }
+      return status.sessionSafetyWaitSeconds || 0;
+    } catch {
+      const lastConnectedSeenAt = lastConnectedSeenAtRef.current;
+      if (!lastConnectedSeenAt) return 0;
+      const elapsedMs = Date.now() - lastConnectedSeenAt;
+      return Math.max(0, Math.ceil((SESSION_RECONNECT_COOLDOWN_MS - elapsedMs) / 1000));
+    }
+  });
+
+  // While the exit is parked waiting out the reconnect cooldown, keep the
+  // countdown moving locally and hand back to the chat the moment the
+  // session key is safe again
+  useEffect(() => {
+    if (!isPendingBack) return undefined;
+    const fetchTimer = window.setInterval(() => {
+      void fetchSessionWaitSeconds().then((waitSeconds) => {
+        setSessionWaitSeconds(waitSeconds);
+        if (waitSeconds > 0) return;
+        unmarkPendingBack();
+        deactivateAutomationMode();
+        initApi();
+      });
+    }, POLL_INTERVAL_MS);
+    const displayTimer = window.setInterval(() => {
+      setSessionWaitSeconds((current) => (current && current > 0 ? current - 1 : current));
+    }, 1000);
+    return () => {
+      window.clearInterval(fetchTimer);
+      window.clearInterval(displayTimer);
+    };
+  }, [isPendingBack]);
+
   const handleReconnect = useLastCallback(async () => {
     startRecovering();
     try {
@@ -121,8 +178,19 @@ const AutomationMode = ({ showIntroTransition }: StateProps) => {
       // Empty targetChats lets the daemon reuse the saved group rotation
       await startAutomationTakeover({ sessionData, targetChats: [] });
       unmarkDaemonFailed();
-    } catch {
-      // Keep the failure panel up — user can retry or leave
+      setReconnectError(undefined);
+      // After a re-login the browser client may own the session — hand it
+      // to the daemon exactly like the panel start does; the takeover went
+      // through as a coordinated handover
+      try {
+        await callApi('disconnect');
+      } catch {
+        // The daemon owns the session now; a failed browser disconnect is
+        // retried by the presence watcher
+      }
+    } catch (err: any) {
+      // Keep the failure panel up and show why the retry did not take
+      setReconnectError(err.message);
     } finally {
       stopRecovering();
     }
@@ -133,11 +201,21 @@ const AutomationMode = ({ showIntroTransition }: StateProps) => {
     try {
       await stopAutomationRelease();
     } catch {
-      // Daemon may be gone entirely; still leave the mode
+      // Daemon may be gone entirely; the cooldown below guards the exit
     }
+    const waitSeconds = await fetchSessionWaitSeconds();
+    stopRecovering();
+    if (waitSeconds > 0) {
+      // Reconnecting now could destroy the session (AUTH_KEY_DUPLICATED) —
+      // park the exit until the Telegram server releases the key
+      setReconnectError(undefined);
+      setSessionWaitSeconds(waitSeconds);
+      markPendingBack();
+      return;
+    }
+    unmarkPendingBack();
     deactivateAutomationMode();
     initApi();
-    stopRecovering();
   });
 
   if (isDaemonFailed) {
@@ -155,7 +233,18 @@ const AutomationMode = ({ showIntroTransition }: StateProps) => {
                 <code>{statusRef.current.lastError}</code>
               </>
             )}
+            {reconnectError && (
+              <>
+                <br />
+                <code>{reconnectError}</code>
+              </>
+            )}
           </p>
+          {isPendingBack && (
+            <p className={styles.failureText}>
+              {lang('AutomationModeSessionWait', { seconds: sessionWaitSeconds || 0 })}
+            </p>
+          )}
           <div className={styles.failureActions}>
             <Button
               color="primary"
@@ -225,6 +314,12 @@ const AutomationMode = ({ showIntroTransition }: StateProps) => {
           ))}
         </nav>
       </div>
+
+      {isPendingBack && (
+        <div className={styles.sessionWaitBanner}>
+          {lang('AutomationModeSessionWait', { seconds: sessionWaitSeconds || 0 })}
+        </div>
+      )}
 
       <div className={styles.content}>
         {activePane === 'automation' && (

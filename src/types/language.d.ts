@@ -4269,6 +4269,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PromoAutomationGlobalOverridesBanner': {
     'fields': V;
   };
+  'AutomationModeSessionWait': {
+    'seconds': V;
+  };
   'PromoAutomationFocusDestinationConfirm': {
     'name': V;
   };

@@ -23,7 +23,7 @@ import { getSystemTheme, setSystemThemeChangeCallback } from '../../../util/syst
 import { startWebsync, stopWebsync } from '../../../util/websync';
 import { callApi } from '../../../api/gramjs';
 import { clearCaching, setupCaching } from '../../cache';
-import { addActionHandler, getGlobal, setGlobal } from '../../index';
+import { addActionHandler, getActions, getGlobal, setGlobal } from '../../index';
 import { updateSharedSettings } from '../../reducers';
 import { updateAuth } from '../../reducers/auth';
 import { updateTabState } from '../../reducers/tabs';
@@ -48,6 +48,113 @@ async function checkIsAutomationRunning(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// Minimal daemon status for connection-safety decisions
+async function fetchDaemonStatusSafety(): Promise<{
+  isTelegramConnected: boolean;
+  isRunning: boolean;
+  sessionSafetyWaitSeconds: number;
+} | undefined> {
+  try {
+    const res = await fetch('/api/v1/automation/status');
+    if (!res.ok) return undefined;
+    const data = await res.json();
+    return {
+      isTelegramConnected: Boolean(data?.isTelegramConnected),
+      isRunning: Boolean(data?.isRunning),
+      sessionSafetyWaitSeconds: Math.max(0, Number(data?.sessionSafetyWaitSeconds) || 0),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+// Reconnecting the browser client with the same auth key while the Telegram
+// server may still consider it in use (after an abrupt daemon end) destroys
+// the session permanently (AUTH_KEY_DUPLICATED, postmortem 72). The daemon
+// reports the remaining wait in its status; when it is unreachable a
+// container restart is likely in progress, so hold off too — bounded by the
+// poll cap below so a genuinely absent daemon never blocks the login screen
+const SESSION_SAFETY_POLL_MS = 15_000;
+const SESSION_SAFETY_MAX_POLLS = 20;
+
+async function connectBrowserClientWhenSessionSafe(pollCount = 0) {
+  const { initApi } = getActions();
+  if (!hasStoredSession() || pollCount >= SESSION_SAFETY_MAX_POLLS) {
+    initApi();
+    return;
+  }
+  const status = await fetchDaemonStatusSafety();
+  if (status && status.sessionSafetyWaitSeconds <= 0) {
+    initApi();
+    return;
+  }
+  window.setTimeout(() => {
+    void connectBrowserClientWhenSessionSafe(pollCount + 1);
+  }, SESSION_SAFETY_POLL_MS);
+}
+
+// Decides how the browser resumes its Telegram connection after a pause
+// (boot or passcode unlock): the daemon may own the session (automation
+// mode, no local connection), or the session may still be "in use"
+// server-side after an abrupt daemon end (cooldown). Connecting the browser
+// client in either state duplicates the auth key, destroying the session
+export async function resumeBrowserClientConnection() {
+  const isAutomationRunning = await checkIsAutomationRunning();
+  if (isAutomationRunning) {
+    getActions().activateAutomationMode();
+    return;
+  }
+  void connectBrowserClientWhenSessionSafe();
+}
+
+// Mirrors the panel handover for remote starts and reports browser presence:
+// the daemon refuses remote starts while a browser client holds the session
+// (two concurrent users of the same auth key destroy it — postmortem 72),
+// and this tab yields its client within seconds of the daemon connecting.
+// The cadence keeps the report fresh, and the 2 min staleness window on the
+// daemon side covers background tabs whose timers browsers throttle to ~1/min
+const DAEMON_PRESENCE_POLL_MS = 5_000;
+let isDaemonPresenceWatcherStarted = false;
+
+async function reportBrowserPresence() {
+  const global = getGlobal();
+  if (!selectTabState(global).isMasterTab) return;
+  if (!hasStoredSession()) return;
+  const isClientConnected = global.connectionState === 'connectionStateReady'
+    && !global.automationMode.isActive;
+  let status: { isTelegramConnected: boolean; isRunning: boolean } | undefined;
+  try {
+    const res = await fetch('/api/v1/automation/browser-presence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isClientConnected }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    status = {
+      isTelegramConnected: Boolean(data?.isTelegramConnected),
+      isRunning: Boolean(data?.isRunning),
+    };
+  } catch {
+    // Daemon unreachable — no presence to report, no takeover to yield to
+    return;
+  }
+  if (!isClientConnected || !status) return;
+  if (!status.isTelegramConnected && !status.isRunning) return;
+  // The daemon owns the session now: yield the browser client exactly like
+  // the local panel start does (disconnect + automation mode)
+  await callApi('disconnect');
+  getActions().activateAutomationMode();
+}
+
+function startDaemonPresenceWatcher() {
+  if (isDaemonPresenceWatcherStarted) return;
+  isDaemonPresenceWatcherStarted = true;
+  window.setInterval(() => {
+    void reportBrowserPresence();
+  }, DAEMON_PRESENCE_POLL_MS);
 }
 
 setSystemThemeChangeCallback((theme) => {
@@ -108,9 +215,13 @@ addActionHandler('switchMultitabRole', async (global, actions, payload): Promise
         // same state.
         actions.activateAutomationMode();
       } else {
-        actions.initApi();
+        // Daemon is not running: only connect once the session key is safe
+        // to use again (postmortem 72)
+        void connectBrowserClientWhenSessionSafe();
       }
     }
+
+    startDaemonPresenceWatcher();
 
     global = getGlobal();
     startWebsync();

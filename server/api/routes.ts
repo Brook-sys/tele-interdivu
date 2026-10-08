@@ -1,18 +1,142 @@
 import type http from 'node:http';
 import { URL } from 'node:url';
 
-import type { TargetChatInfo, TelegramRunner } from '../automation/telegramRunner';
 import type { AutomationDatabase } from '../db/database';
 
 import { FloodWaitActiveError } from '../automation/resolveGuard';
 import { type AutomationScheduler, evaluateGroupEligibility } from '../automation/scheduler';
 import { compileSpunMessage, validateSpintaxSyntax } from '../automation/spintax';
-import { parseCampaignLinkTarget } from '../automation/telegramRunner';
+import {
+  parseCampaignLinkTarget, SESSION_LAST_ALIVE_KEY, SESSION_USER_RELEASED_KEY, type TargetChatInfo,
+  type TelegramRunner,
+} from '../automation/telegramRunner';
 import { readJsonBody, sendError, sendJson } from './httpHelper';
 
 // Server-side guard against accidental double clicks on the test-send button
 const TEST_SEND_COOLDOWN_MS = 15_000;
 let lastTestSendAt = 0;
+
+// After the daemon ends with the session connected and no user-initiated
+// release (crash, SIGKILL, container recreate), the Telegram server can keep
+// the auth key "in use" for a while — proxies make the window worse, since
+// they may hold the upstream open. Reconnecting with the same key inside the
+// window triggers AUTH_KEY_DUPLICATED, which invalidates the session
+// permanently. A user-initiated release ends the window immediately: the
+// browser hand-back that follows a "Parar" is safe by design
+const SESSION_RECONNECT_COOLDOWN_SECONDS = 180;
+
+// Remaining seconds any client (daemon re-arm or browser hand-back) must
+// wait before using the session key again; 0 means "safe to connect now"
+export function getSessionSafetyWaitSeconds(
+  db: AutomationDatabase,
+  isSessionLiveOnDaemon: boolean,
+): number {
+  // The daemon owns the session right now — nothing to protect against
+  if (isSessionLiveOnDaemon) return 0;
+  const lastAliveAt = db.getStateJson<number>(SESSION_LAST_ALIVE_KEY);
+  if (typeof lastAliveAt !== 'number') return 0;
+  const userReleasedAt = db.getStateJson<number>(SESSION_USER_RELEASED_KEY);
+  if (typeof userReleasedAt === 'number' && userReleasedAt >= lastAliveAt) return 0;
+  const elapsedSeconds = Math.floor(Date.now() / 1000) - lastAliveAt;
+  const remainingSeconds = SESSION_RECONNECT_COOLDOWN_SECONDS - elapsedSeconds;
+  return remainingSeconds > 0 ? remainingSeconds : 0;
+}
+
+// Browser presence: the web UI reports whether its local Telegram client
+// holds the session. A remote start while a browser client is connected
+// sustains two concurrent users of the same auth key, which Telegram
+// answers with AUTH_KEY_DUPLICATED — destroying the session. The staleness
+// window below also covers background tabs, whose timers browsers throttle
+// to ~1/min, so a throttled-but-connected tab keeps blocking remote starts
+export const BROWSER_PRESENCE_KEY = 'browser-presence';
+const BROWSER_PRESENCE_BLOCK_SECONDS = 120;
+
+function getIsBrowserClientConnected(db: AutomationDatabase): boolean {
+  const presence = db.getStateJson<{ at: number; isClientConnected: boolean }>(BROWSER_PRESENCE_KEY);
+  if (!presence || !presence.isClientConnected || typeof presence.at !== 'number') return false;
+  return Math.floor(Date.now() / 1000) - presence.at < BROWSER_PRESENCE_BLOCK_SECONDS;
+}
+
+function buildStatusPayload(
+  db: AutomationDatabase,
+  runner: TelegramRunner,
+  scheduler: AutomationScheduler,
+) {
+  const schedulerState = scheduler.getState();
+  // Effective config: local values merged with the global overrides the
+  // master defined — this is what the scheduler actually runs with.
+  // `configOverriddenFields` lets the UI badge those fields
+  const config = db.getEffectiveConfig();
+  const configOverriddenFields = db.getOverriddenFields();
+  const campaign = db.getCampaign();
+  const serverNow = Math.floor(Date.now() / 1000);
+  const todaySent = db.getTodaySentCount(serverNow);
+  const groups = db.getAllGroupStates();
+
+  let readyCount = 0;
+  let waitingSlowmodeCount = 0;
+  let waitingMessagesCount = 0;
+  let blockedCount = 0;
+  let starsCount = 0;
+
+  for (const g of groups) {
+    const evalResult = evaluateGroupEligibility(
+      g, config.minOtherMessages, serverNow, config.minResendIntervalMinutes,
+    );
+    if (evalResult.reason === 'READY') readyCount++;
+    else if (evalResult.reason === 'WAITING_SLOWMODE'
+      || evalResult.reason === 'WAITING_RESEND') {
+      waitingSlowmodeCount++;
+    } else if (evalResult.reason === 'WAITING_MESSAGES') waitingMessagesCount++;
+    else if (evalResult.reason === 'STARS') starsCount++;
+    else if (evalResult.reason === 'BLOCKED') blockedCount++;
+  }
+
+  const validGroupsCount = groups.filter((g) => (
+    g.status !== 'BLOCKED'
+    && g.status !== 'STARS'
+    && (g.starsCost || 0) === 0
+  )).length;
+
+  const stats = {
+    todaySent,
+    dailyLimit: config.dailyLimit,
+    totalGroups: validGroupsCount,
+    readyCount,
+    waitingSlowmodeCount,
+    waitingMessagesCount,
+    blockedCount,
+    starsCount,
+  };
+
+  const isRunning = schedulerState.status === 'RUNNING'
+    || schedulerState.status === 'WAITING_NEXT_ROUND'
+    || schedulerState.status === 'WAITING_COOLDOWN'
+    || schedulerState.status === 'WAITING_MESSAGES'
+    || schedulerState.status === 'MICRO_PAUSE'
+    || schedulerState.status === 'SLEEP_WINDOW'
+    || schedulerState.status === 'CIRCUIT_BREAKER';
+
+  return {
+    isRunning,
+    status: schedulerState.status,
+    waitingReason: schedulerState.waitingReason,
+    isTelegramConnected: runner.getIsConnected(),
+    sessionSafetyWaitSeconds: getSessionSafetyWaitSeconds(db, runner.getIsConnected()),
+    currentChatId: schedulerState.currentChatId,
+    currentChatTitle: schedulerState.currentChatTitle,
+    nextRunAt: schedulerState.nextRunAt,
+    sleepUntil: schedulerState.sleepUntil,
+    waitTotalUntil: schedulerState.waitTotalUntil ?? schedulerState.sleepUntil,
+    activeRound: schedulerState.activeRound,
+    sentInRoundCount: schedulerState.sentInRoundCount,
+    lastError: schedulerState.lastRunError,
+    stats,
+    config,
+    configOverriddenFields,
+    campaign,
+  };
+}
 
 export interface AutomationStartResult {
   success: boolean;
@@ -29,7 +153,30 @@ export async function startAutomationFromSavedState(
   db: AutomationDatabase,
   runner: TelegramRunner,
   scheduler: AutomationScheduler,
+  options?: { isCoordinatedHandover?: boolean },
 ): Promise<AutomationStartResult> {
+  // Never reconnect while the Telegram server may still consider the auth
+  // key in use: a refused start is recoverable (retry later), a duplicated
+  // key is not (the session is destroyed and the account must log in again)
+  const sessionSafetyWaitSeconds = getSessionSafetyWaitSeconds(db, runner.getIsConnected());
+  if (sessionSafetyWaitSeconds > 0) {
+    return {
+      success: false,
+      message: `Session may still be in use after an abrupt daemon end — wait ~${sessionSafetyWaitSeconds}s `
+        + 'and try again (connecting now risks destroying the session)',
+    };
+  }
+  // A remote start must never race the web UI for the session. Only the
+  // coordinated handover (takeover with sessionData, where the browser
+  // yields its client right after the daemon confirms) may connect while a
+  // browser client is live
+  if (!options?.isCoordinatedHandover && getIsBrowserClientConnected(db)) {
+    return {
+      success: false,
+      message: 'The account is open in a web browser — close that tab (or leave the automation '
+        + 'screen) and wait up to ~2 min before starting remotely',
+    };
+  }
   const savedSession = db.getSession();
   if (!savedSession) {
     return {
@@ -52,7 +199,20 @@ export async function startAutomationFromSavedState(
     return { success: false, message: 'No targetChats provided and no groups saved — start from the web UI first' };
   }
   scheduler.stop();
-  await runner.start(sessionData, targetChats);
+  try {
+    await runner.start(sessionData, targetChats);
+  } catch (err: any) {
+    const rawMessage = String((err instanceof Error && err.message) || err);
+    if (rawMessage.includes('AUTH_KEY_DUPLICATED')) {
+      return {
+        success: false,
+        message: 'AUTH_KEY_DUPLICATED — the Telegram session was invalidated (same auth key used '
+          + 'simultaneously, e.g. the account is open in the web UI). Log into the account again '
+          + 'from the web UI and keep it disconnected while the automation runs',
+      };
+    }
+    throw err;
+  }
   scheduler.start();
   return {
     success: true,
@@ -62,9 +222,16 @@ export async function startAutomationFromSavedState(
   };
 }
 
-export async function stopAutomation(runner: TelegramRunner, scheduler: AutomationScheduler) {
+export async function stopAutomation(
+  db: AutomationDatabase,
+  runner: TelegramRunner,
+  scheduler: AutomationScheduler,
+) {
   scheduler.stop();
   await runner.stop();
+  // A user-initiated release ends the reconnect cooldown immediately: the
+  // browser hand-back that follows a "Parar" is safe
+  db.saveStateJson(SESSION_USER_RELEASED_KEY, Math.floor(Date.now() / 1000));
 }
 
 export function createApiHandler(
@@ -106,79 +273,20 @@ export function createApiHandler(
     try {
       // 1. GET status
       if (route === 'status' && method === 'GET') {
-        const schedulerState = scheduler.getState();
-        // Effective config: local values merged with the global overrides the
-        // master defined — this is what the scheduler actually runs with.
-        // `configOverriddenFields` lets the UI badge those fields
-        const config = db.getEffectiveConfig();
-        const configOverriddenFields = db.getOverriddenFields();
-        const campaign = db.getCampaign();
-        const serverNow = Math.floor(Date.now() / 1000);
-        const todaySent = db.getTodaySentCount(serverNow);
-        const groups = db.getAllGroupStates();
+        sendJson(res, 200, buildStatusPayload(db, runner, scheduler));
+        return true;
+      }
 
-        let readyCount = 0;
-        let waitingSlowmodeCount = 0;
-        let waitingMessagesCount = 0;
-        let blockedCount = 0;
-        let starsCount = 0;
-
-        for (const g of groups) {
-          const evalResult = evaluateGroupEligibility(
-            g, config.minOtherMessages, serverNow, config.minResendIntervalMinutes,
-          );
-          if (evalResult.reason === 'READY') readyCount++;
-          else if (evalResult.reason === 'WAITING_SLOWMODE'
-            || evalResult.reason === 'WAITING_RESEND') {
-            waitingSlowmodeCount++;
-          } else if (evalResult.reason === 'WAITING_MESSAGES') waitingMessagesCount++;
-          else if (evalResult.reason === 'STARS') starsCount++;
-          else if (evalResult.reason === 'BLOCKED') blockedCount++;
-        }
-
-        const validGroupsCount = groups.filter((g) => (
-          g.status !== 'BLOCKED'
-          && g.status !== 'STARS'
-          && (g.starsCost || 0) === 0
-        )).length;
-
-        const stats = {
-          todaySent,
-          dailyLimit: config.dailyLimit,
-          totalGroups: validGroupsCount,
-          readyCount,
-          waitingSlowmodeCount,
-          waitingMessagesCount,
-          blockedCount,
-          starsCount,
-        };
-
-        const isRunning = schedulerState.status === 'RUNNING'
-          || schedulerState.status === 'WAITING_NEXT_ROUND'
-          || schedulerState.status === 'WAITING_COOLDOWN'
-          || schedulerState.status === 'WAITING_MESSAGES'
-          || schedulerState.status === 'MICRO_PAUSE'
-          || schedulerState.status === 'SLEEP_WINDOW'
-          || schedulerState.status === 'CIRCUIT_BREAKER';
-
-        sendJson(res, 200, {
-          isRunning,
-          status: schedulerState.status,
-          waitingReason: schedulerState.waitingReason,
-          isTelegramConnected: runner.getIsConnected(),
-          currentChatId: schedulerState.currentChatId,
-          currentChatTitle: schedulerState.currentChatTitle,
-          nextRunAt: schedulerState.nextRunAt,
-          sleepUntil: schedulerState.sleepUntil,
-          waitTotalUntil: schedulerState.waitTotalUntil ?? schedulerState.sleepUntil,
-          activeRound: schedulerState.activeRound,
-          sentInRoundCount: schedulerState.sentInRoundCount,
-          lastError: schedulerState.lastRunError,
-          stats,
-          config,
-          configOverriddenFields,
-          campaign,
+      // 1b. POST browser-presence: the web UI reports whether its local
+      // Telegram client holds the session and reads the full status in the
+      // same round-trip (its takeover watcher drives off this response)
+      if (route === 'browser-presence' && method === 'POST') {
+        const body = await readJsonBody<{ isClientConnected?: boolean }>(req);
+        db.saveStateJson(BROWSER_PRESENCE_KEY, {
+          at: Math.floor(Date.now() / 1000),
+          isClientConnected: Boolean(body?.isClientConnected),
         });
+        sendJson(res, 200, buildStatusPayload(db, runner, scheduler));
         return true;
       }
 
@@ -237,7 +345,9 @@ export function createApiHandler(
           });
         }
 
-        const result = await startAutomationFromSavedState(db, runner, scheduler);
+        const result = await startAutomationFromSavedState(db, runner, scheduler, {
+          isCoordinatedHandover: Boolean(body.sessionData),
+        });
         if (!result.success) {
           sendError(res, 400, result.message);
           return true;
@@ -254,7 +364,7 @@ export function createApiHandler(
 
       // 3. POST release (User pauses/stops automation, reclaiming session for browser)
       if (route === 'release' && method === 'POST') {
-        await stopAutomation(runner, scheduler);
+        await stopAutomation(db, runner, scheduler);
 
         sendJson(res, 200, { success: true, message: 'Automation stopped and session released' });
         return true;

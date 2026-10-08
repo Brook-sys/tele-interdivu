@@ -13,6 +13,9 @@ export interface AutomationStatusResponse {
   isRunning: boolean;
   status: AutomationStatusType;
   isTelegramConnected: boolean;
+  // Remaining seconds before the session key is safe to use again after an
+  // abrupt daemon end; 0 means "safe to connect now"
+  sessionSafetyWaitSeconds?: number;
   currentChatId?: string;
   currentChatTitle?: string;
   nextRunAt?: number;

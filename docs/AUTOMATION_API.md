@@ -46,6 +46,7 @@ Base path: `/api/v1/automation`
 |---|---|---|---|
 | POST | `takeover` | `{ sessionData?, targetChats? }` | Starts (or restarts) the automation. **Remote start:** calling with `{}` reuses the session and group list saved from the last browser takeover. Response includes `usedSavedSession` and `groupsCount`. |
 | POST | `release` | – | Stops the automation immediately and releases the Telegram session back to the browser. |
+| POST | `browser-presence` | `{ isClientConnected }` | The web UI reports whether its local Telegram client holds the session and reads the full `status` payload in the same response. Recorded as presence state (see "Session safety"). |
 
 `targetChats` entry: `{ id, title, accessHash, slowmodeSeconds?, slowmodeNextSendDate?, lastSentAt?, starsCost?, status? }`.
 `status` may be `READY`, `WAITING_SLOWMODE`, `WAITING_RESEND`, `WAITING_MESSAGES`, `BLOCKED`, `STARS` — the daemon quarantines `STARS`/`BLOCKED` and re-probes them automatically every 30 min. The probe is read-only and verifies actual membership (`channels.getParticipant` for supergroups, participant list for basic groups), so per-user bans stay quarantined instead of being reintegrated into failed sends.
@@ -159,7 +160,62 @@ curl -X POST -H 'Content-Type: application/json' $BASE/takeover -d '{}'
 ```
 
 (requires that a browser takeover happened at least once, so the session and
-target groups are saved).
+target groups are saved). A start issued inside the reconnect cooldown below
+is refused with a `400`/`ok:false` telling how many seconds to wait — retry
+after that; nothing was touched on the Telegram side.
+
+### Session safety (postmortem 72)
+
+Telegram answers `AUTH_KEY_DUPLICATED` (406) when the same auth key is used
+simultaneously — and the answer is terminal: **the session is invalidated and
+the account must log in again**. The daemon now enforces a safety window so
+no client ever reconnects while the server may still consider the key "in
+use" (an abrupt daemon end — crash, OOM, container recreate — leaves that
+state behind, and proxies hold the upstream connection open even longer).
+
+* Markers persisted by the daemon: `session-last-alive-at` (refreshed every
+  30s while connected and stamped on disconnect) and
+  `session-user-released-at` (written by every user-initiated stop/release).
+* `GET /api/v1/automation/status` exposes `sessionSafetyWaitSeconds` —
+  seconds remaining before the session key is safe to use again; `0` means
+  safe. While the daemon itself holds the session it is always `0`.
+* The window lasts 180s from the abrupt end and is enforced in three
+  places: the daemon start (`startAutomationFromSavedState` refuses with a
+  clear message), the browser boot/unlock (`initApi` waits for it to reach
+  zero), and the automation-mode exit ("Voltar ao chat" parks with a
+  countdown; with the daemon gone the browser counts the same 180s from the
+  last poll that saw `isTelegramConnected`).
+* A user-initiated release ("Parar") ends the window immediately — the
+  browser hand-back that follows is safe by design.
+* **Browser presence**: the web UI POSTs `browser-presence` every 5s with
+  `isClientConnected`. While a browser client is (or very recently was)
+  holding the session, any **remote** start — `{}` takeover or the
+  orchestration `start` command — is refused with
+  "the account is open in a web browser"; sustained concurrent use of the
+  same auth key is what Telegram punishes with 406. The report stays
+  blocking for 120s after the last beat, so background tabs (whose timers
+  browsers throttle) and just-closed tabs are covered too. The **coordinated
+  handover** (takeover *with* `sessionData` — the panel start / automation
+  reconnect, where the browser yields its client within seconds of the
+  daemon confirming) bypasses the check: that brief overlap is the flow the
+  product has always used.
+* Defense-in-depth: a 5s watcher in the web UI notices the daemon holding
+  the session while the local client is connected and hands the session
+  over (disconnect + automation mode), mirroring the panel handover.
+* `AUTH_KEY_DUPLICATED` surfaces as a structured failure ("log into the
+  account again") instead of a raw RPC error, and the runner never leaves an
+  orphaned client behind (postmortem 72, part 1).
+
+Runbook: a stack redeploy with armed automations is safe — the daemon
+releases the Telegram socket on SIGTERM before the container dies, and
+everything that reconnects afterwards respects the window. After a real
+crash (OOM, SIGKILL), simply wait out the countdown the UI shows before
+arming or browsing the account again. To arm remotely, the account's web UI
+must be closed or sitting in the automation screen — the daemon refuses the
+start otherwise (and tells you so in the ack). Hardening backlog (not
+built): separate authorizations per client (browser and daemon) would remove
+the shared-key fragility entirely — needs a product decision.
+
 
 ### Timezone
 

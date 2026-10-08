@@ -33,6 +33,18 @@
   gap: 0.25rem;
 }
 
+.sessionWaitBanner {
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--color-dividers);
+
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  text-align: center;
+
+  background: var(--color-background-secondary);
+}
+
 .tabNavButton {
   cursor: pointer;
 
