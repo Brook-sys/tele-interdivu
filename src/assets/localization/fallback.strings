@@ -3237,6 +3237,10 @@
 "PromoOrchestrationGrantInProgress" = "em andamento";
 "PromoOrchestrationStart" = "Iniciar";
 "PromoOrchestrationStop" = "Parar";
+"PromoOrchestrationStarting" = "Iniciando…";
+"PromoOrchestrationStopping" = "Parando…";
+"PromoOrchestrationCopying" = "Copiando…";
+"PromoOrchestrationExecuting" = "Executando o comando na conta — aguarde…";
 "PromoOrchestrationStartConfirm" = "Iniciar a automação da conta {account} agora? Ela retoma a sessão e os grupos salvos dela.";
 "PromoOrchestrationStopConfirm" = "Parar a automação da conta {account} agora?";
 "PromoOrchestrationCommandStart" = "iniciar";

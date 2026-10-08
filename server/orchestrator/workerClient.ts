@@ -184,7 +184,12 @@ export class OrchestratorWorkerClient {
         // is still listed as pending here was issued after our request
         this.pendingAcks = [];
         if (response.command) {
-          this.pendingAcks.push(await this.executeCommand(response.command));
+          const ack = await this.executeCommand(response.command);
+          this.pendingAcks.push(ack);
+          // Fast feedback: push the ack right away so the panel does not
+          // wait for the next heartbeat; the heartbeat drain above remains
+          // as backup when this post is lost
+          void this.post('command-ack', { workerId: this.workerId, ack }).catch(() => {});
         }
       } catch (err: any) {
         this.markDegraded(`heartbeat failed: ${err?.message || err}`);

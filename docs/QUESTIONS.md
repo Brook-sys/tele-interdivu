@@ -661,3 +661,32 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     desiredCampaign). Protocolo extensível: campos novos na whitelist
     propagam sem mudar wire-format; worker antigo simplesmente ignora
     campos desconhecidos (272/272).
+
+71. **Fome de slots do orquestrador — fairness sem janela + re-eleição
+    determinística** — Diagnosticado ao vivo pós-deploy v2: ambas as contas
+    passavam a maior parte do tempo em `Aguardando slot global do
+    orquestrador` com a fila cheia de grupos elegíveis (conta 1: 4,4h sem
+    enviar nenhum grupo; ~1 grant/hora na rede). Duas causas combinadas:
+    (a) o round-robin de fairness (`otherLastGrant < myLastGrant`) não
+    tinha janela — num grupo compartilhado onde a conta rival **nunca**
+    enviou (`lastGrant = 0`), quem já tinha enviado ficava bloqueado
+    **para sempre** (`0 < t` é sempre verdadeiro); com 35 grupos
+    compartilhados, boa parte da fila ficava cativa da conta que "devia" a
+    vez e nunca a usava; (b) o scheduler elegia o grupo de `lastSentAt`
+    mais antigo e, negado o claim, dormia 5-30 s e re-elegia **o mesmo
+    grupo** — loop infinito de nega enquanto dezenas de grupos claimáveis
+    ficavam ociosos. Correções: fairness agora expira com a janela de
+    resend (`serverNow - myLastGrant < resendGapSeconds` — após o gap o
+    grupo reabre mesmo se a rival não usou a vez); negativa de claim é
+    cacheada worker-side por até 2 min (`orchestratorSlotDenyUntil`) e o
+    loop segue **imediatamente** para o próximo grupo elegível, dormindo
+    só quando todos estão negados (motivo e próximo slot no log). Junto,
+    no mesmo ciclo: `start`/`stop` do painel passaram a ser empurrados
+    direto ao daemon do worker (`takeover`/`release` na mesma requisição,
+    ack incluso na resposta; heartbeat vira fallback quando a entrega
+    direta falha) e o worker passou a confirmar execução via
+    `POST /command-ack` imediato em vez de esperar o heartbeat seguinte —
+    fim da "demora para iniciar". Painel: botão de ação contextual
+    (Iniciar quando parado, Parar quando rodando, estado da transição
+    durante comando pendente) em vez dos dois botões sempre visíveis
+    (274/274).

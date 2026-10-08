@@ -42,7 +42,8 @@ function validateOverridePatch(patch: { set?: Record<string, unknown>; clear?: s
     if (expectedType === 'number' && Number(value) < 0) {
       return `Field '${field}' must not be negative`;
     }
-    if ((field === 'sleepWindowStart' || field === 'sleepWindowEnd') && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(value))) {
+    const isTimeField = field === 'sleepWindowStart' || field === 'sleepWindowEnd';
+    if (isTimeField && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(value))) {
       return `Field '${field}' must be a valid HH:MM time`;
     }
   }
@@ -70,6 +71,41 @@ function resolveGlobalState(
   }
   coordinator.clearMetaTargets();
   return { overrides, roundTargetShare: undefined };
+}
+
+// A takeover can spend long seconds connecting to Telegram (proxied
+// accounts especially), so the direct push gets a generous deadline
+const DIRECT_DELIVERY_TIMEOUT_MS = 30_000;
+
+// Calls the worker's own automation API for start/stop so the action lands
+// in ~1s instead of waiting for the next heartbeat; campaign copies ride
+// the heartbeat channel because they carry a payload only its executor
+// understands
+async function deliverCommandDirect(
+  apiUrl: string,
+  endpoint: 'takeover' | 'release',
+  authorization: string | undefined,
+): Promise<string> {
+  const res = await fetch(`${apiUrl.replace(/\/+$/, '')}/api/v1/automation/${endpoint}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authorization ? { Authorization: authorization } : {}),
+    },
+    body: JSON.stringify({}),
+    signal: AbortSignal.timeout(DIRECT_DELIVERY_TIMEOUT_MS),
+  });
+
+  let message = '';
+  try {
+    message = (await res.json() as { message?: string }).message || '';
+  } catch {
+    // A non-JSON body is fine: the status code already told the story
+  }
+  if (!res.ok) {
+    throw new Error(message || `HTTP ${res.status}`);
+  }
+  return message;
 }
 
 // Master-only control endpoints under /api/v1/orchestrator/. Not present at
@@ -186,8 +222,61 @@ export function createOrchestratorHandler(
           payload,
           issuedAt: serverNow,
         };
+
+        // Start/stop are pushed straight to the worker's daemon; any failure
+        // (network, auth, rejection) falls back to the heartbeat channel,
+        // where re-delivery is safe because the executors are idempotent
+        const directEndpoint = commandType === 'start'
+          ? 'takeover'
+          : (commandType === 'stop' ? 'release' : undefined);
+        if (directEndpoint) {
+          const worker = coordinator.getWorker(body.workerId)!;
+          try {
+            const message = await deliverCommandDirect(
+              worker.apiUrl,
+              directEndpoint,
+              req.headers.authorization,
+            );
+            const ack: OrchestratorCommandAck = {
+              id: command.id,
+              ok: true,
+              message,
+              at: Math.floor(Date.now() / 1000),
+            };
+            coordinator.ackCommand(body.workerId, ack);
+            sendJson(res, 200, {
+              success: true,
+              command: { id: command.id, type: command.type },
+              result: ack,
+            });
+            return true;
+          } catch (err: any) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[Interdivu Orchestrator] Direct delivery of '${commandType}' to '${body.workerId}' failed `
+              + `(${err?.message || err}); falling back to the heartbeat channel`,
+            );
+          }
+        }
         coordinator.setPendingCommand(body.workerId, command);
         sendJson(res, 200, { success: true, command: { id: command.id, type: command.type } });
+        return true;
+      }
+
+      // Fast ack path: the worker confirms a heartbeat-delivered command
+      // right after executing it instead of waiting for the next heartbeat
+      if (route === '/command-ack' && method === 'POST') {
+        const body = await readJsonBody<{ workerId?: string; ack?: OrchestratorCommandAck }>(req);
+        if (!body.workerId || !body.ack?.id) {
+          sendError(res, 400, 'workerId and ack are required');
+          return true;
+        }
+        if (!coordinator.getWorker(body.workerId)) {
+          sendError(res, 404, `Unknown worker '${body.workerId}'`);
+          return true;
+        }
+        coordinator.ackCommand(body.workerId, body.ack);
+        sendJson(res, 200, { success: true });
         return true;
       }
 

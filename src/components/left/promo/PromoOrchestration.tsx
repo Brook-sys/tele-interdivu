@@ -119,6 +119,7 @@ const PromoOrchestration = ({ isActive, isEmbedded, onReset }: OwnProps) => {
   const [actionError, setActionError] = useState<string>();
   const [isCommandBusy, setIsCommandBusy] = useState(false);
   const [isOverridesBusy, setIsOverridesBusy] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
   const [overrideField, setOverrideField] = useState('minDelaySeconds');
   const [overrideValueText, setOverrideValueText] = useState(
     DEFAULT_OVERRIDE_VALUE_BY_TYPE[OVERRIDEABLE_FIELDS.minDelaySeconds.type],
@@ -162,7 +163,7 @@ const PromoOrchestration = ({ isActive, isEmbedded, onReset }: OwnProps) => {
       isCancelled = true;
       window.clearInterval(interval);
     };
-  }, [isActive]);
+  }, [isActive, refreshTick]);
 
   useEffect(() => {
     if (!isActive) return undefined;
@@ -178,12 +179,13 @@ const PromoOrchestration = ({ isActive, isEmbedded, onReset }: OwnProps) => {
     if (!window.confirm(lang('PromoOrchestrationStartConfirm', { account: label }))) return;
     setIsCommandBusy(true);
     try {
-      await sendOrchestratorCommand(worker.workerId, 'start');
-      setActionError(undefined);
+      const res = await sendOrchestratorCommand(worker.workerId, 'start');
+      setActionError(res.result && !res.result.ok ? res.result.error : undefined);
     } catch (err: any) {
       setActionError(lang('PromoOrchestrationCommandError', { error: err.message }));
     } finally {
       setIsCommandBusy(false);
+      setRefreshTick((tick) => tick + 1);
     }
   });
 
@@ -192,12 +194,13 @@ const PromoOrchestration = ({ isActive, isEmbedded, onReset }: OwnProps) => {
     if (!window.confirm(lang('PromoOrchestrationStopConfirm', { account: label }))) return;
     setIsCommandBusy(true);
     try {
-      await sendOrchestratorCommand(worker.workerId, 'stop');
-      setActionError(undefined);
+      const res = await sendOrchestratorCommand(worker.workerId, 'stop');
+      setActionError(res.result && !res.result.ok ? res.result.error : undefined);
     } catch (err: any) {
       setActionError(lang('PromoOrchestrationCommandError', { error: err.message }));
     } finally {
       setIsCommandBusy(false);
+      setRefreshTick((tick) => tick + 1);
     }
   });
 
@@ -220,6 +223,7 @@ const PromoOrchestration = ({ isActive, isEmbedded, onReset }: OwnProps) => {
       setActionError(lang('PromoOrchestrationCommandError', { error: err.message }));
     } finally {
       setIsCommandBusy(false);
+      setRefreshTick((tick) => tick + 1);
     }
   });
 
@@ -405,6 +409,7 @@ const PromoOrchestration = ({ isActive, isEmbedded, onReset }: OwnProps) => {
         </div>
 
         {actionError && <div className={styles.actionError}>{actionError}</div>}
+        {isCommandBusy && <div className={styles.commandState}>{lang('PromoOrchestrationExecuting')}</div>}
 
         <div className={styles.sectionTitle}>{lang('PromoOrchestrationAccounts')}</div>
         <div className={styles.list}>
@@ -419,6 +424,12 @@ const PromoOrchestration = ({ isActive, isEmbedded, onReset }: OwnProps) => {
             const digest = snap?.configDigest;
             const overriddenCount = snap?.overriddenFields?.length ?? 0;
             const isCommandPending = Boolean(worker.pendingCommand);
+            const pendingType = worker.pendingCommand?.type;
+            // Any non-stopped scheduler state counts as running, including
+            // cooldown and sleep windows
+            const isWorkerRunning = worker.isAlive
+              && Boolean(scheduler?.status)
+              && scheduler?.status !== 'STOPPED';
             const ack = worker.lastCommandAck;
             const agoSeconds = Math.max(0, Math.floor(loaderTarget / 1000) - worker.lastHeartbeatAt);
             const areActionsDisabled = !worker.isAlive || isCommandPending || isCommandBusy;
@@ -517,22 +528,31 @@ const PromoOrchestration = ({ isActive, isEmbedded, onReset }: OwnProps) => {
                 )}
 
                 <div className={styles.actionRow}>
-                  <Button
-                    size="tiny"
-                    color="primary"
-                    disabled={areActionsDisabled}
-                    onClick={() => void handleStartWorker(worker)}
-                  >
-                    {lang('PromoOrchestrationStart')}
-                  </Button>
-                  <Button
-                    size="tiny"
-                    color="danger"
-                    disabled={areActionsDisabled}
-                    onClick={() => void handleStopWorker(worker)}
-                  >
-                    {lang('PromoOrchestrationStop')}
-                  </Button>
+                  {pendingType ? (
+                    <Button size="tiny" color="secondary" disabled>
+                      {lang(pendingType === 'stop'
+                        ? 'PromoOrchestrationStopping'
+                        : (pendingType === 'start' ? 'PromoOrchestrationStarting' : 'PromoOrchestrationCopying'))}
+                    </Button>
+                  ) : isWorkerRunning ? (
+                    <Button
+                      size="tiny"
+                      color="danger"
+                      disabled={areActionsDisabled}
+                      onClick={() => void handleStopWorker(worker)}
+                    >
+                      {lang('PromoOrchestrationStop')}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="tiny"
+                      color="primary"
+                      disabled={areActionsDisabled}
+                      onClick={() => void handleStartWorker(worker)}
+                    >
+                      {lang('PromoOrchestrationStart')}
+                    </Button>
+                  )}
                   {worker.workerId !== info.workerId && (
                     <Button
                       size="tiny"

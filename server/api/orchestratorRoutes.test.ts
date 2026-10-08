@@ -175,7 +175,7 @@ describe('Orchestrator REST API', () => {
   it('delivers commands through heartbeats and records the ack', async () => {
     await api('register', {
       method: 'POST',
-      body: JSON.stringify({ workerId: 'w9', apiUrl: 'http://w9.local', groups: ['-2'] }),
+      body: JSON.stringify({ workerId: 'w9', apiUrl: 'http://127.0.0.1:9', groups: ['-2'] }),
     });
 
     const unknownWorker = await api('workers/command', {
@@ -214,7 +214,7 @@ describe('Orchestrator REST API', () => {
     // The next heartbeat delivers the pending command exactly once
     const delivered = await api('heartbeat', {
       method: 'POST',
-      body: JSON.stringify({ workerId: 'w9', apiUrl: 'http://w9.local', groups: ['-2'] }),
+      body: JSON.stringify({ workerId: 'w9', apiUrl: 'http://127.0.0.1:9', groups: ['-2'] }),
     });
     expect(delivered.data.command).toMatchObject({ id: commandId, type: 'campaign-copy' });
 
@@ -223,7 +223,7 @@ describe('Orchestrator REST API', () => {
       method: 'POST',
       body: JSON.stringify({
         workerId: 'w9',
-        apiUrl: 'http://w9.local',
+        apiUrl: 'http://127.0.0.1:9',
         groups: ['-2'],
         commandAcks: [{ id: commandId, ok: true, message: 'applied' }],
       }),
@@ -248,7 +248,7 @@ describe('Orchestrator REST API', () => {
 
     const expired = await api('heartbeat', {
       method: 'POST',
-      body: JSON.stringify({ workerId: 'w9', apiUrl: 'http://w9.local', groups: ['-2'] }),
+      body: JSON.stringify({ workerId: 'w9', apiUrl: 'http://127.0.0.1:9', groups: ['-2'] }),
     });
     expect(expired.data.command).toBeUndefined();
 
@@ -262,6 +262,76 @@ describe('Orchestrator REST API', () => {
     try {
       const res = await fetch(`http://127.0.0.1:${workerCtx.port}/api/v1/orchestrator/info`);
       expect(res.status).toBe(404);
+    } finally {
+      workerCtx.db.close();
+      workerCtx.server.close();
+    }
+  });
+
+  it('delivers start/stop straight to a reachable worker daemon, falling back to heartbeats', async () => {
+    const workerCtx = await startServer(false);
+    try {
+      const apiUrl = `http://127.0.0.1:${workerCtx.port}`;
+      const registered = await api('register', {
+        method: 'POST',
+        body: JSON.stringify({ workerId: 'w-direct', apiUrl, groups: ['-7'] }),
+      });
+      expect(registered.status).toBe(200);
+
+      // A reachable daemon executes stop through its own release endpoint
+      // and the ack comes back in the same request
+      const stop = await api('workers/command', {
+        method: 'POST',
+        body: JSON.stringify({ workerId: 'w-direct', type: 'stop' }),
+      });
+      expect(stop.status).toBe(200);
+      expect(stop.data.result).toMatchObject({ ok: true, message: 'Automation stopped and session released' });
+
+      const workersAfterStop = await api('workers');
+      const stopped = (workersAfterStop.data as any[]).find((worker) => worker.workerId === 'w-direct');
+      expect(stopped.pendingCommand).toBeUndefined();
+      expect(stopped.lastCommandAck).toMatchObject({ ok: true, message: 'Automation stopped and session released' });
+
+      // A start the daemon refuses (no saved session) falls back to the
+      // heartbeat channel instead of dying with the direct push
+      const start = await api('workers/command', {
+        method: 'POST',
+        body: JSON.stringify({ workerId: 'w-direct', type: 'start' }),
+      });
+      expect(start.status).toBe(200);
+      expect(start.data.result).toBeUndefined();
+
+      const workersAfterStart = await api('workers');
+      const pending = (workersAfterStart.data as any[]).find((worker) => worker.workerId === 'w-direct');
+      expect(pending.pendingCommand).toMatchObject({ type: 'start' });
+
+      // The next heartbeat delivers the pending command...
+      const delivered = await api('heartbeat', {
+        method: 'POST',
+        body: JSON.stringify({ workerId: 'w-direct', apiUrl, groups: ['-7'] }),
+      });
+      expect(delivered.data.command).toMatchObject({ type: 'start' });
+
+      // ...and the worker's immediate ack endpoint closes it without
+      // waiting for another heartbeat
+      const ackRes = await api('command-ack', {
+        method: 'POST',
+        body: JSON.stringify({
+          workerId: 'w-direct',
+          ack: {
+            id: delivered.data.command.id,
+            ok: false,
+            error: 'No sessionData provided and no saved session found — start from the web UI first',
+            at: Math.floor(Date.now() / 1000),
+          },
+        }),
+      });
+      expect(ackRes.status).toBe(200);
+
+      const workersAfterAck = await api('workers');
+      const acked = (workersAfterAck.data as any[]).find((worker) => worker.workerId === 'w-direct');
+      expect(acked.pendingCommand).toBeUndefined();
+      expect(acked.lastCommandAck).toMatchObject({ ok: false });
     } finally {
       workerCtx.db.close();
       workerCtx.server.close();
@@ -382,7 +452,7 @@ describe('Master self-registration, override cache and command execution', () =>
       workerDb,
       masterUrl,
       'worker-3',
-      'http://worker.local:8093',
+      'http://127.0.0.1:9',
       undefined,
       (command) => {
         executedCommands.push(command);

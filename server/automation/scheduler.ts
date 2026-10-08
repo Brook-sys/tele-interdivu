@@ -162,6 +162,9 @@ const REVALIDATE_BATCH_SIZE = 10;
 // probe faster so stale classifications (e.g. from cached frontend state)
 // are corrected within minutes instead of hours
 const REVALIDATE_CATCHUP_INTERVAL_MS = 60_000;
+// Upper bound for how long a single orchestrator denial suppresses a group:
+// cheap re-claims keep the local view of the global timeline fresh
+const ORCHESTRATOR_DENY_CAP_SECONDS = 120;
 
 export class AutomationScheduler {
   private state: SchedulerState = {
@@ -189,6 +192,11 @@ export class AutomationScheduler {
   ) {}
 
   private lastRevalidateAt = 0;
+
+  // Per-group orchestrator denials: the master said "not yet" for this
+  // group, so the loop moves on to other groups instead of re-claiming the
+  // same one on every pass (which starved the queue under fairness waits)
+  private orchestratorSlotDenyUntil = new Map<string, number>();
 
   private lastProbeAtByChat = new Map<string, number>();
 
@@ -660,6 +668,9 @@ export class AutomationScheduler {
         let slowestGroupTitle = '';
         let countWaitingSlowmode = 0;
         let countWaitingMessages = 0;
+        let countWaitingSlot = 0;
+        let minSlotWaitSeconds = Infinity;
+        let slotWaitTitle = '';
 
         for (const g of validGroups) {
           let evalResult = evaluateGroupEligibility(
@@ -710,7 +721,18 @@ export class AutomationScheduler {
           }
 
           if (evalResult.isEligible) {
-            readyGroups.push(g);
+            const denyUntil = this.orchestratorSlotDenyUntil.get(g.chatId) ?? 0;
+            if (denyUntil > serverNow) {
+              countWaitingSlot++;
+              const slotWaitSeconds = denyUntil - serverNow;
+              if (slotWaitSeconds < minSlotWaitSeconds) {
+                minSlotWaitSeconds = slotWaitSeconds;
+                slotWaitTitle = g.title;
+              }
+            } else {
+              this.orchestratorSlotDenyUntil.delete(g.chatId);
+              readyGroups.push(g);
+            }
           }
         }
 
@@ -728,6 +750,26 @@ export class AutomationScheduler {
         }
 
         if (!eligibleGroup) {
+          // Slot-denied groups open sooner than local cooldowns when their
+          // deny window is the shortest wait in the queue
+          if (countWaitingSlot > 0 && minSlotWaitSeconds < minSlowmodeWaitSeconds) {
+            this.logWaitTransitionOnce(
+              'SLOT',
+              `Nenhum grupo elegível. ${countWaitingSlot} aguardando slot global `
+              + `(próximo libera em ~${Math.max(1, Math.round(minSlotWaitSeconds))}s).`,
+              serverNow,
+            );
+            this.state.status = 'WAITING_COOLDOWN';
+            this.state.currentChatTitle = slotWaitTitle;
+            this.state.waitingReason = 'Aguardando slot global do orquestrador';
+            const waitMs = Math.min(Math.max(5, minSlotWaitSeconds), 30) * 1000;
+            await this.sleep(waitMs, signal);
+            this.state.currentChatTitle = undefined;
+            this.state.waitingReason = undefined;
+            this.state.status = 'RUNNING';
+            continue;
+          }
+
           // No groups currently satisfy all criteria
           if (countWaitingSlowmode > 0) {
             const cooldownReason = buildCooldownWaitReason(
@@ -792,12 +834,19 @@ export class AutomationScheduler {
         if (this.orchestratorClient) {
           const claim = await this.orchestratorClient.claimSendSlot(eligibleGroup.chatId, eligibleGroup.title);
           if (claim && !claim.granted) {
-            this.state.status = 'WAITING_COOLDOWN';
-            this.state.waitingReason = 'Aguardando slot global do orquestrador';
-            const waitMs = Math.min(Math.max(5, (claim.retryAfterMs || 15_000) / 1000), 30) * 1000;
-            await this.sleep(waitMs, signal);
-            this.state.waitingReason = undefined;
-            this.state.status = 'RUNNING';
+            // Cache the denial and immediately try another group: sleeping
+            // here re-elected the same "oldest" group forever while dozens
+            // of claimable groups sat idle
+            const denySeconds = Math.min(
+              Math.max(5, Math.ceil((claim.retryAfterMs || 15_000) / 1000)),
+              ORCHESTRATOR_DENY_CAP_SECONDS,
+            );
+            this.orchestratorSlotDenyUntil.set(eligibleGroup.chatId, serverNow + denySeconds);
+            // eslint-disable-next-line no-console
+            console.log(
+              `[Interdivu Scheduler] Slot global negado em "${eligibleGroup.title}": `
+              + `${claim.reason} — seguindo para outro grupo`,
+            );
             continue;
           }
         }

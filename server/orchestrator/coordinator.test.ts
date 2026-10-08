@@ -34,6 +34,31 @@ describe('OrchestratorCoordinator', () => {
     expect(afterLock.granted).toBe(true);
   });
 
+  it('expires the fairness turn with the resend window', () => {
+    const { coordinator } = createStack();
+    const now = 1_000_000;
+    coordinator.upsertWorker({ workerId: 'w1', apiUrl: 'http://w1', groups: ['-1'] });
+    coordinator.upsertWorker({ workerId: 'w2', apiUrl: 'http://w2', groups: ['-1'] });
+
+    // Only w1 ever used the group, with a non-success result so the global
+    // cooldown does not interfere with the fairness checks below
+    coordinator.applyClaim('-1', 'Grupo A', 'w1', now);
+    coordinator.applyReport('w1', '-1', 'blocked', now + 5);
+
+    const denied = coordinator.applyClaim('-1', 'Grupo A', 'w1', now + 100);
+    expect(denied.granted).toBe(false);
+    expect((denied as { reason?: string }).reason).toBe('fairness_wait');
+
+    // The contender can take its turn at any time
+    const contender = coordinator.applyClaim('-1', 'Grupo A', 'w2', now + 100);
+    expect(contender.granted).toBe(true);
+
+    // Once the window passes the group reopens to w1 even though the
+    // contender never used its turn
+    const reopened = coordinator.applyClaim('-1', 'Grupo A', 'w1', now + 700);
+    expect(reopened.granted).toBe(true);
+  });
+
   it('enforces the global per-group timeline after a successful report', () => {
     const { coordinator } = createStack();
     const now = 1_000_000;

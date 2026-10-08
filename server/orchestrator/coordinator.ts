@@ -236,7 +236,10 @@ export class OrchestratorCoordinator {
         .map((grant) => grant.grantedAt)
         .sort((a, b) => b - a)[0] ?? 0;
 
-      if (otherLastGrant < myLastGrant) {
+      // The contender's turn expires with the resend window: once my last
+      // grant on this group is older than the gap, the contender had ample
+      // opportunity and the group reopens to me
+      if (otherLastGrant < myLastGrant && serverNow - myLastGrant < resendGapSeconds) {
         return { granted: false, retryAfterMs: 15_000, reason: 'fairness_wait' };
       }
     }

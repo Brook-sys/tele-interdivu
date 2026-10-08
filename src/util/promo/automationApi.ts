@@ -543,6 +543,15 @@ export interface OrchestratorCommandAck {
   at: number;
 }
 
+// When the worker daemon is directly reachable the master executes start/stop
+// in the same request and returns the outcome; otherwise the command rides
+// the heartbeat channel and `result` is absent
+export interface SendOrchestratorCommandResult {
+  success: boolean;
+  command: { id: string; type: string };
+  result?: OrchestratorCommandAck;
+}
+
 export interface OrchestratorWorker {
   workerId: string;
   apiUrl: string;
@@ -628,8 +637,8 @@ export function sendOrchestratorCommand(
   workerId: string,
   type: 'start' | 'stop' | 'campaign-copy',
   payload?: unknown,
-): Promise<{ success: boolean; command: { id: string; type: string } }> {
-  return requestOrchestrator<{ success: boolean; command: { id: string; type: string } }>(
+): Promise<SendOrchestratorCommandResult> {
+  return requestOrchestrator<SendOrchestratorCommandResult>(
     'workers/command',
     {
       method: 'POST',

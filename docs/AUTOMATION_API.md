@@ -222,13 +222,18 @@ environment:
   overrides through the same cache (refreshed immediately on edit).
 - **Command channel** (`POST /api/v1/orchestrator/workers/command`, body
   `{ workerId, type, payload? }` with `type` = `start` | `stop` |
-  `campaign-copy`): one pending command per account, delivered in the
-  heartbeat response, acked on the next heartbeat (acked commands are
-  recorded on the worker row for panel feedback). Commands expire after
-  120 s so a long-dead command never fires when the account comes back.
-  Executors are idempotent: `start` when already running and `stop` when
-  stopped are no-ops, `campaign-copy` replaces content. Every command is a
-  single explicit click per account in the panel — no batching, no retries.
+  `campaign-copy`): one command per account per click. `start`/`stop` are
+  first pushed straight to the worker's own automation API (`takeover` /
+  `release`), which executes in the same request and returns the ack — the
+  panel response then carries `result` with the daemon's message. Any
+  failure (network, auth, rejection) falls back to the heartbeat channel,
+  where the command stays pending until delivered and is acked right after
+  execution (`POST /command-ack`; the next heartbeat re-sends the ack as
+  backup). Pending commands expire after 120 s so a long-dead command never
+  fires when the account comes back. Executors are idempotent: `start` when
+  already running and `stop` when stopped are no-ops, `campaign-copy`
+  replaces content. Every command is a single explicit click per account in
+  the panel — no batching, no retries.
 - **Self-registration**: a master with no `MASTER_URL` registers its own
   account as a worker through its local daemon API, so the master's sends
   are coordinated under the same global rules and its account appears in
@@ -241,8 +246,13 @@ environment:
   There is no automatic sync by design.
 - Before every send the worker claims a global per-group slot
   (`POST /api/v1/orchestrator/claim`); the master interleaves accounts by
-  oldest last-grant and enforces a shared per-group cooldown. Stars/blocked
-  reports quarantine the group globally for all workers.
+  oldest last-grant and enforces a shared per-group cooldown. The fairness
+  turn expires with the resend window, so a contender that never takes its
+  turn cannot lock a group forever. A denied claim is cached worker-side for
+  up to 2 minutes: the scheduler immediately moves on to another eligible
+  group and only sleeps when every candidate is denied (log line
+  `[Interdivu Scheduler] Slot global negado …`). Stars/blocked reports
+  quarantine the group globally for all workers.
 - If the master is unreachable, workers switch to degraded mode: they keep
   sending standalone with their local config plus the last cached overrides,
   and rejoin automatically. State transitions are logged (`docker logs`) —
@@ -253,7 +263,7 @@ environment:
   digest, start/stop/copy actions behind confirmations) plus the global
   values editor.
 - Endpoints (master only): `GET info`, `GET workers`, `DELETE workers?workerId=`,
-  `GET grants?limit=`, `GET/PUT overrides`, `POST register|heartbeat|claim|report|workers/command`.
+  `GET grants?limit=`, `GET/PUT overrides`, `POST register|heartbeat|claim|report|workers/command|command-ack`.
 
 ### Extract niceties
 

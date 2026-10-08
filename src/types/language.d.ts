@@ -2388,6 +2388,10 @@ export interface LangPair {
   'PromoOrchestrationGrantInProgress': undefined;
   'PromoOrchestrationStart': undefined;
   'PromoOrchestrationStop': undefined;
+  'PromoOrchestrationStarting': undefined;
+  'PromoOrchestrationStopping': undefined;
+  'PromoOrchestrationCopying': undefined;
+  'PromoOrchestrationExecuting': undefined;
   'PromoOrchestrationCommandStart': undefined;
   'PromoOrchestrationCommandStop': undefined;
   'PromoOrchestrationCommandCopy': undefined;
