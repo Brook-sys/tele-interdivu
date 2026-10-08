@@ -202,29 +202,58 @@ environment:
   ORCHESTRATOR_TOKEN: "shared-secret"
 ```
 
-- Workers register + heartbeat every 15s (sending their group list + status);
-  the master pushes the centralized config + campaign in the response, so
-  editing config on the master propagates to every account automatically,
-  and round targets are rebalanced across alive workers. Each worker adopts
-  its rebalanced share as the local `roundTargetSends`.
+- Workers register + heartbeat every 15s (sending their group list + status).
+  The heartbeat response carries only **sparse global overrides** plus the
+  account's rebalanced round-target share (when a global target is defined);
+  there is **no config or campaign sync** — each account owns its local
+  config and campaign, and cached overrides are stored in a dedicated
+  `orchestrator_state` table, never written over local values. Removing an
+  override instantly restores local behavior. The cache survives restarts
+  and degraded periods.
+- **Effective config**: the scheduler and status route always read
+  `getEffectiveConfig()` = local config merged with the cached overrides.
+  `roundTargetSends` is special: a global target is split across alive
+  accounts by the master, so the rebalanced share replaces it per account.
+- **Global values** (`GET/PUT /api/v1/orchestrator/overrides`, master only):
+  `PUT` body `{ set?: { field: value }, clear?: [field] }` against the
+  whitelist `OVERRIDEABLE_CONFIG_FIELDS` (rhythm, limits, sleep window,
+  micro-pauses, link preview, extractor, template rotation). Unknown fields
+  or wrong types are rejected with 400. The master's own account consumes
+  overrides through the same cache (refreshed immediately on edit).
+- **Command channel** (`POST /api/v1/orchestrator/workers/command`, body
+  `{ workerId, type, payload? }` with `type` = `start` | `stop` |
+  `campaign-copy`): one pending command per account, delivered in the
+  heartbeat response, acked on the next heartbeat (acked commands are
+  recorded on the worker row for panel feedback). Commands expire after
+  120 s so a long-dead command never fires when the account comes back.
+  Executors are idempotent: `start` when already running and `stop` when
+  stopped are no-ops, `campaign-copy` replaces content. Every command is a
+  single explicit click per account in the panel — no batching, no retries.
 - **Self-registration**: a master with no `MASTER_URL` registers its own
   account as a worker through its local daemon API, so the master's sends
   are coordinated under the same global rules and its account appears in
-  the panel like any other. The self-registration never applies the desired
-  config/campaign back onto itself (it is the source of truth) — instead
-  its scheduler consumes its rebalanced `metaTarget` share directly.
+  the panel like any other, including identity (username/user id captured
+  at connect time and reported in the heartbeat snapshot).
+- **Campaign copy**: the orchestration panel can copy the master's campaign
+  to another account as a one-shot, confirmed action. The payload is
+  content-only (templates, links, destinations by index) — local row ids
+  never leave the origin and the destination rebuilds rows with its own ids.
+  There is no automatic sync by design.
 - Before every send the worker claims a global per-group slot
   (`POST /api/v1/orchestrator/claim`); the master interleaves accounts by
   oldest last-grant and enforces a shared per-group cooldown. Stars/blocked
   reports quarantine the group globally for all workers.
 - If the master is unreachable, workers switch to degraded mode: they keep
-  sending standalone (previous interleaving offsets persist per account) and
-  rejoin automatically. State transitions are logged (`docker logs`) —
+  sending standalone with their local config plus the last cached overrides,
+  and rejoin automatically. State transitions are logged (`docker logs`) —
   `[Interdivu Orchestrator] … running degraded` / `restored` — instead of
   failing silently; boot logs state the role, worker id and master target.
-- Panel: "Orquestração" in the side menu (workers show a hint instead).
+- Panel: "Orquestração" in the side menu (workers show a hint instead). The
+  panel is a read-only cockpit over accounts (identity, effective-rhythm
+  digest, start/stop/copy actions behind confirmations) plus the global
+  values editor.
 - Endpoints (master only): `GET info`, `GET workers`, `DELETE workers?workerId=`,
-  `GET grants?limit=`, `POST register|heartbeat|claim|report`.
+  `GET grants?limit=`, `GET/PUT overrides`, `POST register|heartbeat|claim|report|workers/command`.
 
 ### Extract niceties
 
@@ -287,9 +316,6 @@ link list.
 - One-time migration: on the first boot after the upgrade, existing links with
   a resolved title are grouped into destinations named after that title; the
   rest land in a `Destino inicial` destination (per campaign, runs once).
-- Orchestrator sync: the master heartbeat now ships `destinations[]` and
-  link→destination references **by index**; workers map them to their own
-  local ids. Workers on older images ignore the extra fields.
 
 ### Campaign live-testing, link health and member tracking
 

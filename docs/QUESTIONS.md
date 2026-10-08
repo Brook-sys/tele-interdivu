@@ -627,3 +627,37 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     aos ids locais) + asserções de `isDegraded === false`. Validado ao
     vivo: campanha da conta 2 agora é espelho exato da conta 1
     (268/268).
+
+70. **Orquestração v2 — fim do desired-state; config/campanha 100% locais,
+    overrides globais esparsos e canal de comandos** — Decisão de produto
+    registrada após o postmortem 69: mesmo com o sync consertado, empurrar
+    estado completo (config + campanha) a cada heartbeat é frágil e
+    acoplado — qualquer mudança de shape quebra o worker distante, e a
+    conta vira um clone sem identidade própria. Modelo novo: (a) cada
+    conta é dona da própria config e campanha, sempre; (b) o master define
+    **overrides esparsos por campo** (`orchestrator_overrides`,
+    whitelist `OVERRIDEABLE_CONFIG_FIELDS` — ritmo completo), o daemon
+    aplica `efetivo = override ?? local` via cache persistido em
+    `orchestrator_state` (nunca escreve na config local; remoção do
+    override restaura o valor local na hora; cache sobrevive a restart e a
+    período degradado); `roundTargetSends` é especial — a meta global é
+    dividida entre contas online e a **fatia** substitui o campo
+    (`clearMetaTargets` quando não há override, cada conta volta à meta
+    local); (c) ações **por comando, com ack**: `start`/`stop`/
+    `campaign-copy` ficam pendentes na linha do worker
+    (`pending_command_json`), são entregues no heartbeat, executados de
+    forma idempotente e ackados no tick seguinte (`last_command_ack_json`);
+    TTL de 120 s expira comando de conta morta (anti-zombie-start); (d)
+    painel "Orquestração" vira cockpit: identidade (username/user id
+    capturados no connect), digest só-leitura do ritmo efetivo,
+    Iniciar/Parar/copiar campanha **um clique consciente por conta com
+    confirmação** (nunca em lote — regra permanente), seção "Valores
+    globais" e badges de override no editor de ritmo; (e) cópia de
+    campanha é one-shot e content-only (destinos por índice, ids locais
+    nunca vazam; destino reconstrói com ids próprios) — sem sincronização
+    automática por design. Compatibilidade de deploy misto: worker novo
+    ignora resposta sem `overrides` (checagem por presença de chave);
+    master novo não quebra worker velho (não envia mais desiredConfig/
+    desiredCampaign). Protocolo extensível: campos novos na whitelist
+    propagam sem mudar wire-format; worker antigo simplesmente ignora
+    campos desconhecidos (272/272).
