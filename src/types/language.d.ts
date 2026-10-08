@@ -2383,6 +2383,45 @@ export interface LangPair {
   'PromoOrchestrationNoWorkers': undefined;
   'PromoOrchestrationGrantsFeed': undefined;
   'PromoOrchestrationNoGrants': undefined;
+  'PromoOrchestrationOffline': undefined;
+  'PromoOrchestrationDegradedSuffix': undefined;
+  'PromoOrchestrationGrantInProgress': undefined;
+  'PromoOrchestrationStart': undefined;
+  'PromoOrchestrationStop': undefined;
+  'PromoOrchestrationCommandStart': undefined;
+  'PromoOrchestrationCommandStop': undefined;
+  'PromoOrchestrationCommandCopy': undefined;
+  'PromoOrchestrationCommandApplied': undefined;
+  'PromoOrchestrationCommandFailed': undefined;
+  'PromoOrchestrationGlobalValues': undefined;
+  'PromoOrchestrationGlobalValuesHint': undefined;
+  'PromoOrchestrationNoOverrides': undefined;
+  'PromoOrchestrationDefineOverride': undefined;
+  'PromoOrchestrationRemoveOverride': undefined;
+  'PromoOrchestrationRoundTargetHint': undefined;
+  'PromoOrchestrationValueOn': undefined;
+  'PromoOrchestrationValueOff': undefined;
+  'PromoOrchestrationInvalidNumber': undefined;
+  'PromoOrchestrationInvalidTime': undefined;
+  'PromoOrchestrationFieldMode': undefined;
+  'PromoOrchestrationFieldMinDelay': undefined;
+  'PromoOrchestrationFieldMaxDelay': undefined;
+  'PromoOrchestrationFieldRoundInterval': undefined;
+  'PromoOrchestrationFieldRoundTarget': undefined;
+  'PromoOrchestrationFieldMinOtherMessages': undefined;
+  'PromoOrchestrationFieldMinResendInterval': undefined;
+  'PromoOrchestrationFieldSleepEnabled': undefined;
+  'PromoOrchestrationFieldSleepStart': undefined;
+  'PromoOrchestrationFieldSleepEnd': undefined;
+  'PromoOrchestrationFieldDailyLimit': undefined;
+  'PromoOrchestrationFieldLinkPreview': undefined;
+  'PromoOrchestrationFieldMicroPauseEnabled': undefined;
+  'PromoOrchestrationFieldMicroPauseMin': undefined;
+  'PromoOrchestrationFieldMicroPauseMax': undefined;
+  'PromoOrchestrationFieldMicroPauseSeconds': undefined;
+  'PromoOrchestrationFieldExtractor': undefined;
+  'PromoOrchestrationFieldRotation': undefined;
+  'PromoAutomationExecutionMode': undefined;
   'AutomationModeTitle': undefined;
   'AutomationModeLostTitle': undefined;
   'AutomationModeLostText': undefined;
@@ -4172,6 +4211,55 @@ export interface LangPairWithVariables<V = LangVariable> {
   'SettingsLanguageDesc': {
     'language': V;
   };
+  'PromoOrchestrationRoundProgress': {
+    'round': V;
+    'sent': V;
+    'target': V;
+  };
+  'PromoOrchestrationWorkerTodaySent': {
+    'count': V;
+  };
+  'PromoOrchestrationHeartbeatAgo': {
+    'duration': V;
+  };
+  'PromoOrchestrationStartConfirm': {
+    'account': V;
+  };
+  'PromoOrchestrationStopConfirm': {
+    'account': V;
+  };
+  'PromoOrchestrationCommandPending': {
+    'command': V;
+  };
+  'PromoOrchestrationCommandError': {
+    'error': V;
+  };
+  'PromoOrchestrationDigestDelay': {
+    'min': V;
+    'max': V;
+  };
+  'PromoOrchestrationDigestRound': {
+    'minutes': V;
+  };
+  'PromoOrchestrationDigestTarget': {
+    'count': V;
+  };
+  'PromoOrchestrationDigestMinOther': {
+    'count': V;
+  };
+  'PromoOrchestrationDigestResend': {
+    'count': V;
+  };
+  'PromoOrchestrationDigestDaily': {
+    'count': V;
+  };
+  'PromoOrchestrationDigestSleep': {
+    'start': V;
+    'end': V;
+  };
+  'PromoAutomationGlobalOverridesBanner': {
+    'fields': V;
+  };
   'PromoAutomationFocusDestinationConfirm': {
     'name': V;
   };
@@ -4718,6 +4806,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'PromoOrchestrationGroupsCount': {
+    'count': V;
+  };
+  'PromoOrchestrationGlobalBadge': {
     'count': V;
   };
   'PromoExtractMembers': {

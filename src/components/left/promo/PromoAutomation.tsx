@@ -55,6 +55,7 @@ import {
 } from '../../../util/promo/automationApi';
 import { classifyPromoChat, getSlowmodeRemainingSeconds } from '../../../util/promo/classifyChat';
 import { formatCountdownSeconds } from '../../../util/promo/countdownFormat';
+import { getOverrideFieldLabel } from '../../../util/promo/orchestratorFields';
 import {
   compileSpunMessage,
   countMessageVariations,
@@ -1796,10 +1797,18 @@ const PromoAutomation = ({
   };
 
   const renderSettingsTab = () => {
+    const overriddenConfigFields = statusData?.configOverriddenFields ?? [];
     return (
       <div className={styles.tabContent}>
+        {overriddenConfigFields.length > 0 && (
+          <div className={styles.globalOverridesBanner}>
+            {lang('PromoAutomationGlobalOverridesBanner', {
+              fields: lang.conjunction(overriddenConfigFields.map((field) => getOverrideFieldLabel(field, lang))),
+            })}
+          </div>
+        )}
         <div className={styles.fieldGroup}>
-          <label className={styles.fieldLabel}>Modo de Execução</label>
+          <label className={styles.fieldLabel}>{lang('PromoAutomationExecutionMode')}</label>
           <div className={styles.radioGroup}>
             <Radio
               name="mode"

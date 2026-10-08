@@ -56,6 +56,9 @@ export interface AutomationStatusResponse {
     memberTrackingEnabled?: boolean;
     memberTrackingIntervalHours?: number;
   };
+  // Fields currently defined globally by the orchestration master; local edits
+  // to those fields have no effect until the override is removed
+  configOverriddenFields?: string[];
   campaign: AutomationCampaign;
 }
 
@@ -504,6 +507,42 @@ export interface OrchestratorInfo {
   aliveWorkerIds: string[];
 }
 
+export interface OrchestratorAccountInfo {
+  userId: string;
+  username?: string;
+  firstName?: string;
+}
+
+// Read-only digest of the effective rhythm each account reports in its
+// heartbeat (local values merged with the global overrides)
+export interface OrchestratorConfigDigest {
+  mode: 'manual' | 'continuous';
+  minDelaySeconds: number;
+  maxDelaySeconds: number;
+  roundIntervalMinutes: number;
+  roundTargetSends: number;
+  minOtherMessages: number;
+  minResendIntervalMinutes: number;
+  dailyLimit: number;
+  sleepWindowEnabled: boolean;
+  sleepWindowStart: string;
+  sleepWindowEnd: string;
+}
+
+export interface OrchestratorPendingCommand {
+  id: string;
+  type: 'start' | 'stop' | 'campaign-copy';
+  issuedAt: number;
+}
+
+export interface OrchestratorCommandAck {
+  id: string;
+  ok: boolean;
+  message?: string;
+  error?: string;
+  at: number;
+}
+
 export interface OrchestratorWorker {
   workerId: string;
   apiUrl: string;
@@ -513,10 +552,15 @@ export interface OrchestratorWorker {
     scheduler?: { status?: string; activeRound?: number; sentInRoundCount?: number };
     todaySent?: number;
     isDegraded?: boolean;
+    account?: OrchestratorAccountInfo;
+    configDigest?: OrchestratorConfigDigest;
+    overriddenFields?: string[];
   };
   metaTarget?: number;
   lastHeartbeatAt: number;
   isAlive?: boolean;
+  pendingCommand?: OrchestratorPendingCommand;
+  lastCommandAck?: OrchestratorCommandAck;
 }
 
 export interface OrchestratorGrant {
@@ -528,6 +572,9 @@ export interface OrchestratorGrant {
   lockUntil: number;
   result?: string;
 }
+
+export type OrchestratorOverrideValue = string | number | boolean;
+export type OrchestratorOverrides = Record<string, OrchestratorOverrideValue>;
 
 async function requestOrchestrator<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getApiToken();
@@ -557,4 +604,36 @@ export function fetchOrchestratorWorkers(): Promise<OrchestratorWorker[]> {
 
 export function fetchOrchestratorGrants(limit = 100): Promise<OrchestratorGrant[]> {
   return requestOrchestrator<OrchestratorGrant[]>(`grants?limit=${limit}`);
+}
+
+export function fetchOrchestratorOverrides(): Promise<{ overrides: OrchestratorOverrides }> {
+  return requestOrchestrator<{ overrides: OrchestratorOverrides }>('overrides');
+}
+
+// Sparse patch: `set` defines/replaces fields, `clear` removes them so every
+// account falls back to its own local value
+export function updateOrchestratorOverrides(patch: {
+  set?: Record<string, OrchestratorOverrideValue>;
+  clear?: string[];
+}): Promise<{ overrides: OrchestratorOverrides }> {
+  return requestOrchestrator<{ overrides: OrchestratorOverrides }>('overrides', {
+    method: 'PUT',
+    body: JSON.stringify(patch),
+  });
+}
+
+// Issues a command to a single account; execution still requires the account
+// to ack it, so the action is per-account and never batched
+export function sendOrchestratorCommand(
+  workerId: string,
+  type: 'start' | 'stop' | 'campaign-copy',
+  payload?: unknown,
+): Promise<{ success: boolean; command: { id: string; type: string } }> {
+  return requestOrchestrator<{ success: boolean; command: { id: string; type: string } }>(
+    'workers/command',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload === undefined ? { workerId, type } : { workerId, type, payload }),
+    },
+  );
 }
