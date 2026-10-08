@@ -75,7 +75,7 @@ function resolveGlobalState(
 
 // A takeover can spend long seconds connecting to Telegram (proxied
 // accounts especially), so the direct push gets a generous deadline
-const DIRECT_DELIVERY_TIMEOUT_MS = 30_000;
+const DIRECT_DELIVERY_TIMEOUT_MS = 45_000;
 
 // Calls the worker's own automation API for start/stop so the action lands
 // in ~1s instead of waiting for the next heartbeat; campaign copies ride

@@ -5,7 +5,8 @@ import type { AutomationScheduler } from '../automation/scheduler';
 import { SESSION_LAST_ALIVE_KEY, SESSION_USER_RELEASED_KEY, TelegramRunner } from '../automation/telegramRunner';
 import { AutomationDatabase } from '../db/database';
 import {
-  BROWSER_PRESENCE_KEY, getSessionSafetyWaitSeconds, startAutomationFromSavedState, stopAutomation,
+  BROWSER_PRESENCE_KEY, buildSessionFingerprint, buildStatusPayload, getSessionSafetyWaitSeconds,
+  startAutomationFromSavedState, stopAutomation,
 } from './routes';
 
 function createStack() {
@@ -68,7 +69,7 @@ describe('session safety cooldown', () => {
     db.saveStateJson(SESSION_LAST_ALIVE_KEY, nowSeconds());
     const result = await startAutomationFromSavedState(db, runner, scheduler);
     expect(result.success).toBe(false);
-    expect(result.message).toContain('wait');
+    expect(result.message).toContain('aguarde');
     expect(runner.start).not.toHaveBeenCalled();
     expect(scheduler.start).not.toHaveBeenCalled();
   });
@@ -100,14 +101,96 @@ describe('session safety cooldown', () => {
     expect(getSessionSafetyWaitSeconds(db, false)).toBe(0);
   });
 
-  it('refuses a remote start while a browser client holds the session', async () => {
+  it('refuses a remote start when the browser never yields the session', async () => {
+    vi.useFakeTimers();
+    try {
+      const { db, runner, scheduler } = createStack();
+      db.saveStateJson(BROWSER_PRESENCE_KEY, { at: nowSeconds(), isClientConnected: true });
+      const promise = startAutomationFromSavedState(db, runner, scheduler);
+      await vi.advanceTimersByTimeAsync(13_000);
+      const result = await promise;
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('não liberou');
+      expect(result.message).toContain('painel da própria conta');
+      expect(runner.start).not.toHaveBeenCalled();
+      expect(scheduler.start).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('publishes the pending-start marker in the status while waiting for the yield', async () => {
+    vi.useFakeTimers();
+    try {
+      const { db, runner, scheduler } = createStack();
+      db.saveStateJson(BROWSER_PRESENCE_KEY, { at: nowSeconds(), isClientConnected: true });
+      const promise = startAutomationFromSavedState(db, runner, scheduler);
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(buildStatusPayload(db, runner, scheduler).browserPendingStart).toBe(true);
+      await vi.advanceTimersByTimeAsync(12_000);
+      await promise;
+      expect(buildStatusPayload(db, runner, scheduler).browserPendingStart).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts remotely once the browser tab yields during the handshake', async () => {
+    vi.useFakeTimers();
+    try {
+      const { db, runner, scheduler } = createStack();
+      db.saveStateJson(BROWSER_PRESENCE_KEY, { at: nowSeconds(), isClientConnected: true });
+      const promise = startAutomationFromSavedState(db, runner, scheduler);
+      await vi.advanceTimersByTimeAsync(2_500);
+      // The tab hands the session over on its next presence beat
+      db.saveStateJson(BROWSER_PRESENCE_KEY, { at: nowSeconds(), isClientConnected: false });
+      await vi.advanceTimersByTimeAsync(1_500);
+      const result = await promise;
+      expect(result.success).toBe(true);
+      expect(runner.start).toHaveBeenCalledTimes(1);
+      expect(scheduler.start).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuses immediately when the saved session no longer matches the browser one', async () => {
     const { db, runner, scheduler } = createStack();
-    db.saveStateJson(BROWSER_PRESENCE_KEY, { at: nowSeconds(), isClientConnected: true });
+    db.saveSession(JSON.stringify({ mainDcId: 2, keys: { 2: 'saved-key' } }));
+    db.saveStateJson(BROWSER_PRESENCE_KEY, {
+      at: nowSeconds(),
+      isClientConnected: true,
+      sessionFingerprint: 'stale-fingerprint',
+    });
     const result = await startAutomationFromSavedState(db, runner, scheduler);
     expect(result.success).toBe(false);
-    expect(result.message).toContain('web browser');
+    expect(result.message).toContain('não corresponde');
+    expect(result.message).toContain('Iniciar');
     expect(runner.start).not.toHaveBeenCalled();
     expect(scheduler.start).not.toHaveBeenCalled();
+  });
+
+  it('starts remotely when the fingerprints match and the tab yields', async () => {
+    vi.useFakeTimers();
+    try {
+      const { db, runner, scheduler } = createStack();
+      db.saveSession(JSON.stringify({ mainDcId: 2, keys: { 2: 'saved-key' } }));
+      const fingerprint = buildSessionFingerprint({ keys: { 2: 'saved-key' } });
+      db.saveStateJson(BROWSER_PRESENCE_KEY, {
+        at: nowSeconds(),
+        isClientConnected: true,
+        sessionFingerprint: fingerprint,
+      });
+      const promise = startAutomationFromSavedState(db, runner, scheduler);
+      await vi.advanceTimersByTimeAsync(2_500);
+      db.saveStateJson(BROWSER_PRESENCE_KEY, { at: nowSeconds(), isClientConnected: false });
+      await vi.advanceTimersByTimeAsync(1_500);
+      const result = await promise;
+      expect(result.success).toBe(true);
+      expect(runner.start).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('allows a coordinated handover (takeover with sessionData) with the browser connected', async () => {

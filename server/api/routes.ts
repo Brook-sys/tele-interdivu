@@ -50,14 +50,74 @@ export function getSessionSafetyWaitSeconds(
 // to ~1/min, so a throttled-but-connected tab keeps blocking remote starts
 export const BROWSER_PRESENCE_KEY = 'browser-presence';
 const BROWSER_PRESENCE_BLOCK_SECONDS = 120;
+type BrowserPresence = { at: number; isClientConnected: boolean; sessionFingerprint?: string };
+
+// Pending-start handshake: when a remote start arrives while the browser
+// holds the session, the daemon publishes this marker in its status so the
+// account's tab hands the session over (disconnect) on its next presence
+// beat, instead of the start being refused outright
+const PENDING_START_KEY = 'pending-start-at';
+const PENDING_START_WAIT_MS = 12_000;
+const PENDING_START_POLL_MS = 1_000;
+const PENDING_START_FRESH_SECONDS = 30;
+
+function getBrowserPresence(db: AutomationDatabase): BrowserPresence | undefined {
+  const presence = db.getStateJson<BrowserPresence>(BROWSER_PRESENCE_KEY);
+  if (!presence || typeof presence.at !== 'number') return undefined;
+  return presence;
+}
 
 function getIsBrowserClientConnected(db: AutomationDatabase): boolean {
-  const presence = db.getStateJson<{ at: number; isClientConnected: boolean }>(BROWSER_PRESENCE_KEY);
-  if (!presence || !presence.isClientConnected || typeof presence.at !== 'number') return false;
+  const presence = getBrowserPresence(db);
+  if (!presence?.isClientConnected) return false;
   return Math.floor(Date.now() / 1000) - presence.at < BROWSER_PRESENCE_BLOCK_SECONDS;
 }
 
-function buildStatusPayload(
+// Short stable identity of the auth keys inside a session object, shared by
+// the daemon and the browser (mirrored in src/global/actions/ui/initial.ts —
+// pure FNV-1a, no WebCrypto, since the UI can be served over plain HTTP). A
+// mismatch means the saved session is not the one the browser holds (e.g.
+// the account re-logged in), so a remote start could only ever run on a
+// dead or foreign key. Exported for tests
+export function buildSessionFingerprint(sessionData: any): string | undefined {
+  const keys = sessionData?.keys;
+  if (!keys || typeof keys !== 'object') return undefined;
+  const serialized = Object.keys(keys).sort()
+    .map((dcId) => `${dcId}:${String(keys[dcId] ?? '')}`)
+    .join('|');
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < serialized.length; i++) {
+    hash ^= serialized.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function getIsBrowserPendingStart(db: AutomationDatabase): boolean {
+  const pendingStartAt = db.getStateJson<number>(PENDING_START_KEY);
+  if (typeof pendingStartAt !== 'number' || pendingStartAt <= 0) return false;
+  return Math.floor(Date.now() / 1000) - pendingStartAt < PENDING_START_FRESH_SECONDS;
+}
+
+// Waits for the account's tab to hand the session over: a presence beat that
+// reports itself disconnected and was posted after the handshake started
+async function waitForBrowserSessionYield(db: AutomationDatabase): Promise<boolean> {
+  const sinceSeconds = Math.floor(Date.now() / 1000);
+  const hasYielded = () => {
+    const presence = getBrowserPresence(db);
+    return Boolean(presence) && presence.isClientConnected === false && presence.at >= sinceSeconds;
+  };
+
+  const deadline = Date.now() + PENDING_START_WAIT_MS;
+  while (Date.now() < deadline) {
+    if (hasYielded()) return true;
+    await new Promise((resolve) => setTimeout(resolve, PENDING_START_POLL_MS));
+  }
+  return hasYielded();
+}
+
+// Exported for tests: the pending-start flag drives the browser handover
+export function buildStatusPayload(
   db: AutomationDatabase,
   runner: TelegramRunner,
   scheduler: AutomationScheduler,
@@ -123,6 +183,7 @@ function buildStatusPayload(
     waitingReason: schedulerState.waitingReason,
     isTelegramConnected: runner.getIsConnected(),
     sessionSafetyWaitSeconds: getSessionSafetyWaitSeconds(db, runner.getIsConnected()),
+    browserPendingStart: getIsBrowserPendingStart(db),
     currentChatId: schedulerState.currentChatId,
     currentChatTitle: schedulerState.currentChatTitle,
     nextRunAt: schedulerState.nextRunAt,
@@ -162,21 +223,11 @@ export async function startAutomationFromSavedState(
   if (sessionSafetyWaitSeconds > 0) {
     return {
       success: false,
-      message: `Session may still be in use after an abrupt daemon end — wait ~${sessionSafetyWaitSeconds}s `
-        + 'and try again (connecting now risks destroying the session)',
+      message: `A sessão pode ainda estar em uso no servidor após um encerramento abrupto — aguarde `
+        + `~${sessionSafetyWaitSeconds}s e tente de novo (conectar agora destruiria a sessão)`,
     };
   }
-  // A remote start must never race the web UI for the session. Only the
-  // coordinated handover (takeover with sessionData, where the browser
-  // yields its client right after the daemon confirms) may connect while a
-  // browser client is live
-  if (!options?.isCoordinatedHandover && getIsBrowserClientConnected(db)) {
-    return {
-      success: false,
-      message: 'The account is open in a web browser — close that tab (or leave the automation '
-        + 'screen) and wait up to ~2 min before starting remotely',
-    };
-  }
+
   const savedSession = db.getSession();
   if (!savedSession) {
     return {
@@ -198,6 +249,41 @@ export async function startAutomationFromSavedState(
   if (!targetChats.length) {
     return { success: false, message: 'No targetChats provided and no groups saved — start from the web UI first' };
   }
+
+  // A remote start must never race the web UI for the session: two live
+  // users of the same auth key destroy it. Only the coordinated handover
+  // (takeover with sessionData, where the browser yields its client right
+  // after the daemon confirms) may connect while a browser client is live
+  if (!options?.isCoordinatedHandover && getIsBrowserClientConnected(db)) {
+    const presence = getBrowserPresence(db);
+    const savedFingerprint = buildSessionFingerprint(sessionData);
+    const browserFingerprint = presence?.sessionFingerprint;
+    // The saved session is not the one the browser holds (e.g. a re-login
+    // happened): connecting could only run on a dead key. Say the exact way
+    // out instead of failing cryptically minutes later
+    if (savedFingerprint && browserFingerprint && savedFingerprint !== browserFingerprint) {
+      return {
+        success: false,
+        message: 'A sessão salva no servidor não corresponde à sessão aberta no navegador '
+          + '(ex.: novo login). Abra o painel da própria conta e clique em "Iniciar" '
+          + 'para entregar a sessão nova.',
+      };
+    }
+    // Ask the account's tab to hand the session over and give it a beat to
+    // comply — a fresh presence beat saying "disconnected" means the daemon
+    // can connect with zero overlap
+    db.saveStateJson(PENDING_START_KEY, Math.floor(Date.now() / 1000));
+    const hasYielded = await waitForBrowserSessionYield(db);
+    db.saveStateJson(PENDING_START_KEY, 0);
+    if (!hasYielded) {
+      return {
+        success: false,
+        message: 'A interface web da conta não liberou a sessão a tempo. Deixe a aba da conta '
+          + 'aberta por alguns segundos e tente de novo, ou inicie pelo painel da própria conta.',
+      };
+    }
+  }
+
   scheduler.stop();
   try {
     await runner.start(sessionData, targetChats);
@@ -206,9 +292,9 @@ export async function startAutomationFromSavedState(
     if (rawMessage.includes('AUTH_KEY_DUPLICATED')) {
       return {
         success: false,
-        message: 'AUTH_KEY_DUPLICATED — the Telegram session was invalidated (same auth key used '
-          + 'simultaneously, e.g. the account is open in the web UI). Log into the account again '
-          + 'from the web UI and keep it disconnected while the automation runs',
+        message: 'AUTH_KEY_DUPLICATED — a sessão do Telegram foi invalidada (a mesma chave usada em '
+          + 'dois clientes ao mesmo tempo, ex.: a conta aberta na interface web). Faça login na conta '
+          + 'de novo pela interface web e mantenha-a desconectada enquanto a automação roda.',
       };
     }
     throw err;
@@ -281,10 +367,13 @@ export function createApiHandler(
       // Telegram client holds the session and reads the full status in the
       // same round-trip (its takeover watcher drives off this response)
       if (route === 'browser-presence' && method === 'POST') {
-        const body = await readJsonBody<{ isClientConnected?: boolean }>(req);
+        const body = await readJsonBody<{ isClientConnected?: boolean; sessionFingerprint?: string }>(req);
         db.saveStateJson(BROWSER_PRESENCE_KEY, {
           at: Math.floor(Date.now() / 1000),
           isClientConnected: Boolean(body?.isClientConnected),
+          sessionFingerprint: typeof body?.sessionFingerprint === 'string'
+            ? body.sessionFingerprint
+            : undefined,
         });
         sendJson(res, 200, buildStatusPayload(db, runner, scheduler));
         return true;

@@ -17,7 +17,7 @@ import { subscribe, unsubscribe } from '../../../util/notifications';
 import { oldSetLanguage } from '../../../util/oldLangProvider';
 import { decryptSessionByCurrentHash } from '../../../util/passcode';
 import { applyPerformanceSettings } from '../../../util/perfomanceSettings';
-import { hasStoredSession, storeSession } from '../../../util/sessions';
+import { hasStoredSession, loadStoredSession, storeSession } from '../../../util/sessions';
 import switchTheme from '../../../util/switchTheme';
 import { getSystemTheme, setSystemThemeChangeCallback } from '../../../util/systemTheme';
 import { startWebsync, stopWebsync } from '../../../util/websync';
@@ -77,15 +77,21 @@ async function fetchDaemonStatusSafety(): Promise<{
 // container restart is likely in progress, so hold off too — bounded by the
 // poll cap below so a genuinely absent daemon never blocks the login screen
 const SESSION_SAFETY_POLL_MS = 15_000;
-const SESSION_SAFETY_MAX_POLLS = 20;
+const SESSION_SAFETY_MAX_POLLS = 12;
 
 async function connectBrowserClientWhenSessionSafe(pollCount = 0) {
-  const { initApi } = getActions();
+  const { initApi, activateAutomationMode } = getActions();
   if (!hasStoredSession() || pollCount >= SESSION_SAFETY_MAX_POLLS) {
     initApi();
     return;
   }
   const status = await fetchDaemonStatusSafety();
+  // The daemon owns the session right now (automation running or mid
+  // takeover): connecting the browser client would duplicate the auth key
+  if (status && (status.isRunning || status.isTelegramConnected)) {
+    activateAutomationMode();
+    return;
+  }
   if (status && status.sessionSafetyWaitSeconds <= 0) {
     initApi();
     return;
@@ -110,13 +116,32 @@ export async function resumeBrowserClientConnection() {
 }
 
 // Mirrors the panel handover for remote starts and reports browser presence:
-// the daemon refuses remote starts while a browser client holds the session
-// (two concurrent users of the same auth key destroy it — postmortem 72),
-// and this tab yields its client within seconds of the daemon connecting.
-// The cadence keeps the report fresh, and the 2 min staleness window on the
-// daemon side covers background tabs whose timers browsers throttle to ~1/min
-const DAEMON_PRESENCE_POLL_MS = 5_000;
+// the daemon asks for the session (browserPendingStart) or takes it over, and
+// this tab yields its client within one beat — two concurrent users of the
+// same auth key destroy the session (postmortem 72). The cadence keeps the
+// report fresh and bounds the accidental-overlap window; the 2 min staleness
+// window on the daemon side covers background tabs whose timers browsers
+// throttle to ~1/min
+const DAEMON_PRESENCE_POLL_MS = 2_500;
 let isDaemonPresenceWatcherStarted = false;
+
+// Same identity the daemon derives from a session object (mirrored in
+// server/api/routes.ts — pure FNV-1a, no WebCrypto, which is unavailable
+// when the UI is served over plain HTTP). The daemon compares it with the
+// saved session to detect a re-login before a remote start
+function computeSessionFingerprint(): string | undefined {
+  const keys = loadStoredSession()?.keys;
+  if (!keys || !Object.keys(keys).length) return undefined;
+  const serialized = Object.keys(keys).sort()
+    .map((dcId) => `${dcId}:${String(keys[Number(dcId)] ?? '')}`)
+    .join('|');
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < serialized.length; i++) {
+    hash ^= serialized.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
 
 async function reportBrowserPresence() {
   const global = getGlobal();
@@ -124,27 +149,33 @@ async function reportBrowserPresence() {
   if (!hasStoredSession()) return;
   const isClientConnected = global.connectionState === 'connectionStateReady'
     && !global.automationMode.isActive;
-  let status: { isTelegramConnected: boolean; isRunning: boolean } | undefined;
+  let status: {
+    isTelegramConnected: boolean;
+    isRunning: boolean;
+    browserPendingStart: boolean;
+  } | undefined;
   try {
     const res = await fetch('/api/v1/automation/browser-presence', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isClientConnected }),
+      body: JSON.stringify({ isClientConnected, sessionFingerprint: computeSessionFingerprint() }),
     });
     if (!res.ok) return;
     const data = await res.json();
     status = {
       isTelegramConnected: Boolean(data?.isTelegramConnected),
       isRunning: Boolean(data?.isRunning),
+      browserPendingStart: Boolean(data?.browserPendingStart),
     };
   } catch {
     // Daemon unreachable — no presence to report, no takeover to yield to
     return;
   }
   if (!isClientConnected || !status) return;
-  if (!status.isTelegramConnected && !status.isRunning) return;
-  // The daemon owns the session now: yield the browser client exactly like
-  // the local panel start does (disconnect + automation mode)
+  if (!status.browserPendingStart && !status.isTelegramConnected && !status.isRunning) return;
+  // The daemon owns the session now (or asked for it): yield the browser
+  // client exactly like the local panel start does (disconnect + automation
+  // mode)
   await callApi('disconnect');
   getActions().activateAutomationMode();
 }

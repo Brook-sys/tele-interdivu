@@ -53,8 +53,14 @@ addActionHandler('syncAutomationModeFromOtherTab', (global, actions): ActionRetu
       const shouldBeActive = Boolean(data?.isRunning || data?.isTelegramConnected);
       const currentGlobal = getGlobal();
       if (shouldBeActive !== currentGlobal.automationMode.isActive) {
-        if (shouldBeActive) actions.activateAutomationMode();
-        else actions.deactivateAutomationMode();
+        if (shouldBeActive) {
+          // Drop this tab's client too: keeping it connected while the
+          // daemon runs would sustain two users of the same auth key
+          actions.disconnect();
+          actions.activateAutomationMode();
+        } else {
+          actions.deactivateAutomationMode();
+        }
       }
     })
     .catch(() => undefined);

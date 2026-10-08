@@ -16,6 +16,9 @@ export interface AutomationStatusResponse {
   // Remaining seconds before the session key is safe to use again after an
   // abrupt daemon end; 0 means "safe to connect now"
   sessionSafetyWaitSeconds?: number;
+  // The daemon is waiting for this account's tab to hand the session over so
+  // a remote start can proceed — the tab yields its client when it sees this
+  browserPendingStart?: boolean;
   currentChatId?: string;
   currentChatTitle?: string;
   nextRunAt?: number;

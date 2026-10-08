@@ -741,3 +741,58 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     (286/286). Backlog de hardening (exige decisão de produto): autorizações
     separadas por client (browser e daemon com keys próprias) eliminaria a
     fragilidade da key compartilhada.
+
+73. **Postmortem do segundo 406 + recusa de arm remoto que travou o fluxo do
+    cockpit (2026-10-08)** — Timeline validada por logs: as duas contas
+    rodaram bem pela manhã (acc1 19 envios, acc2 43) na imagem ANTERIOR ao
+    fix 72; às 09:44:55Z a account-2 tomou 406 (`AUTH_KEY_DUPLICATED`,
+    "outro cliente assumiu — ex.: o webapp foi aberto") — o webapp foi aberto
+    com o daemon rodando, exatamente a classe de incidente que o fix 72 (que
+    só subiu às 14:12Z) visa eliminar. Depois do deploy do fix, o usuário
+    re-logou a account-2 e tentou armar AMBAS pelo painel de orquestração às
+    ~14:58Z — as duas recusadas pelo guard de presença com a mensagem em
+    inglês "close that tab and wait up to ~2 min", que (a) não dizia o que
+    realmente resolveria e (b) transformou o fluxo principal do cockpit em
+    dead-end. Brechas encontradas na revisão completa: (1) a recusa de
+    presença não tinha caminho de auto-resolução; (2) `connectBrowserClientWhenSessionSafe`
+    ignorava `isRunning`/`isTelegramConnected` do status — race boot × arm
+    remoto podia conectar o browser com o daemon vivo; (3) `syncAutomationModeFromOtherTab`
+    ativava o modo automação SEM desconectar o client da aba (dual-use
+    cross-tab); (4) `requestReconnectApi` (health-check do worker Safari)
+    reconectava sem gate — no modo automação isso reconectaria com o daemon
+    rodando; (5) `fetchSessionWaitSeconds` retornava 0 quando
+    `isTelegramConnected` — e "Voltar ao chat" interpretava 0 como "seguro
+    conectar": release falho + daemon vivo = 406 na saída; (6) start remoto
+    pós-relogin usaria a sessão salva morta e falharia com erro críptico de
+    RPC em vez de instrução acionável. Correções: **handshake de
+    pending-start** — start remoto com browser presente publica
+    `browserPendingStart` no status por ≤30s e espera até 12s; o watcher da
+    aba da conta (~2.5s, antes 5s) vê a flag, entrega a sessão
+    (disconnect + modo automação) e confirma no próximo beat; o daemon só
+    conecta após beat fresco `isClientConnected:false` — sobreposição zero;
+    aba que não responde (fechada/throttle de background) → recusa honesta
+    após 12s; **fingerprint de sessão** — o beat carrega SHA-256(prefixo) das
+    authKeys; divergência com a sessão salva (relogin) = recusa IMEDIATA
+    dizendo para usar o painel da própria conta (Iniciar), em vez de
+    conectar numa key morta; guard `isRunning||isTelegramConnected` no boot
+    (entra no modo automação em vez de initApi); sync cross-tab desconecta o
+    client antes de ativar o modo; `requestReconnectApi` não reconecta no
+    modo automação; "Voltar ao chat"/countdown usam `SessionHandbackState`
+    (daemon dono da sessão → não sai do modo, não conecta) com erro visível
+    se o release não vingou; mensagens de guard em PT-BR acionáveis;
+    `DIRECT_DELIVERY_TIMEOUT_MS` 30s→45s para cobrir handshake+connect
+    dentro de UMA entrega (sem cair no fallback confuso do heartbeat).
+    Validação: 16 testes em `sessionSafety.test.ts` (290/290 no total) +
+    E2E com daemon real em sandbox (sessão fake, DB limpo, sem API ID —
+    zero contato com Telegram): fingerprint divergente → recusa imediata
+    (0.00s); handshake → `browserPendingStart:true` visível no status,
+    yield aceito em 2.0s, start liberado; sem yield → recusa honesta em
+    12.0s. Fluxo do usuário volta a ser: cockpit Iniciar → a aba da conta
+    entrega a sessão sozinha → armado; a ÚNICA exceção é conta recém
+    re-logada (fingerprint divergente), em que o ack manda usar o painel da
+    conta uma vez — depois disso o cockpit volta a funcionar sempre.
+    Ressalva de risco permanente: o guard cobre o navegador DESTE
+    produto; a mesma conta logada em OUTRO cliente (Telegram desktop /
+    celular / outro navegador fora daqui) continua podendo gerar
+    AUTH_KEY_DUPLICATED — Telegram não oferece isolamento por client sem
+    autorizações separadas (backlog 72, exige decisão de produto).

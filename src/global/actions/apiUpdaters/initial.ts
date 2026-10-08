@@ -76,7 +76,14 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       onUpdateCurrentUser(global, update);
       break;
 
-    case 'requestReconnectApi':
+    case 'requestReconnectApi': {
+      // In automation mode the daemon owns the session: reconnecting the
+      // browser client (e.g. the iOS/Safari worker health check) would
+      // duplicate the auth key and destroy it (postmortem 72)
+      if (global.automationMode.isActive) {
+        break;
+      }
+
       global = { ...global, isSynced: false };
       setGlobal(global);
 
@@ -87,6 +94,7 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       });
       actions.initApi();
       break;
+    }
 
     case 'requestSync':
       resetOpenedChannelShortpollState();

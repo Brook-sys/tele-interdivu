@@ -36,6 +36,13 @@ type AutomationPane = 'automation' | 'extract' | 'orchestration';
 
 type IntroStep = 'takeover' | 'daemon' | 'disconnect' | 'done';
 
+type SessionHandbackState = {
+  waitSeconds: number;
+  // The daemon holds (or is starting) the session: the browser client
+  // must never reconnect in this state — two live users destroy the key
+  isDaemonOwningSession: boolean;
+};
+
 const INTRO_STEPS: {
   key: IntroStep;
   langKey: 'AutomationModeStepTakeover' | 'AutomationModeStepDaemon'
@@ -129,20 +136,24 @@ const AutomationMode = ({ showIntroTransition }: StateProps) => {
   // own cooldown while it is reachable; when it is gone entirely, count the
   // same window from the last poll that saw the session connected — the
   // daemon died holding it
-  const fetchSessionWaitSeconds = useLastCallback(async (): Promise<number> => {
+  const fetchSessionHandbackState = useLastCallback(async (): Promise<SessionHandbackState> => {
     try {
       const status = await fetchAutomationStatus();
       statusRef.current = status;
       if (status.isTelegramConnected) {
         lastConnectedSeenAtRef.current = Date.now();
-        return 0;
+        return { waitSeconds: 0, isDaemonOwningSession: true };
       }
-      return status.sessionSafetyWaitSeconds || 0;
+      return {
+        waitSeconds: status.sessionSafetyWaitSeconds || 0,
+        isDaemonOwningSession: status.isRunning,
+      };
     } catch {
       const lastConnectedSeenAt = lastConnectedSeenAtRef.current;
-      if (!lastConnectedSeenAt) return 0;
+      if (!lastConnectedSeenAt) return { waitSeconds: 0, isDaemonOwningSession: false };
       const elapsedMs = Date.now() - lastConnectedSeenAt;
-      return Math.max(0, Math.ceil((SESSION_RECONNECT_COOLDOWN_MS - elapsedMs) / 1000));
+      const waitSeconds = Math.max(0, Math.ceil((SESSION_RECONNECT_COOLDOWN_MS - elapsedMs) / 1000));
+      return { waitSeconds, isDaemonOwningSession: false };
     }
   });
 
@@ -152,9 +163,15 @@ const AutomationMode = ({ showIntroTransition }: StateProps) => {
   useEffect(() => {
     if (!isPendingBack) return undefined;
     const fetchTimer = window.setInterval(() => {
-      void fetchSessionWaitSeconds().then((waitSeconds) => {
-        setSessionWaitSeconds(waitSeconds);
-        if (waitSeconds > 0) return;
+      void fetchSessionHandbackState().then((handback) => {
+        setSessionWaitSeconds(handback.waitSeconds);
+        if (handback.isDaemonOwningSession) {
+          // The daemon took the session back while the exit was parked:
+          // stay in automation mode instead of reconnecting the browser
+          unmarkPendingBack();
+          return;
+        }
+        if (handback.waitSeconds > 0) return;
         unmarkPendingBack();
         deactivateAutomationMode();
         initApi();
@@ -203,13 +220,19 @@ const AutomationMode = ({ showIntroTransition }: StateProps) => {
     } catch {
       // Daemon may be gone entirely; the cooldown below guards the exit
     }
-    const waitSeconds = await fetchSessionWaitSeconds();
+    const handback = await fetchSessionHandbackState();
     stopRecovering();
-    if (waitSeconds > 0) {
+    if (handback.isDaemonOwningSession) {
+      // The release did not take: reconnecting now would duplicate the
+      // auth key (AUTH_KEY_DUPLICATED) — stay in automation mode
+      setReconnectError('A automação ainda está ativa no servidor — use "Parar" antes de voltar ao chat.');
+      return;
+    }
+    if (handback.waitSeconds > 0) {
       // Reconnecting now could destroy the session (AUTH_KEY_DUPLICATED) —
       // park the exit until the Telegram server releases the key
       setReconnectError(undefined);
-      setSessionWaitSeconds(waitSeconds);
+      setSessionWaitSeconds(handback.waitSeconds);
       markPendingBack();
       return;
     }

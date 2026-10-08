@@ -46,7 +46,7 @@ Base path: `/api/v1/automation`
 |---|---|---|---|
 | POST | `takeover` | `{ sessionData?, targetChats? }` | Starts (or restarts) the automation. **Remote start:** calling with `{}` reuses the session and group list saved from the last browser takeover. Response includes `usedSavedSession` and `groupsCount`. |
 | POST | `release` | – | Stops the automation immediately and releases the Telegram session back to the browser. |
-| POST | `browser-presence` | `{ isClientConnected }` | The web UI reports whether its local Telegram client holds the session and reads the full `status` payload in the same response. Recorded as presence state (see "Session safety"). |
+| POST | `browser-presence` | `{ isClientConnected, sessionFingerprint? }` | The web UI reports whether its local Telegram client holds the session, plus a short fingerprint of its session keys, and reads the full `status` payload in the same response (including `browserPendingStart`). Recorded as presence state (see "Session safety"). |
 
 `targetChats` entry: `{ id, title, accessHash, slowmodeSeconds?, slowmodeNextSendDate?, lastSentAt?, starsCost?, status? }`.
 `status` may be `READY`, `WAITING_SLOWMODE`, `WAITING_RESEND`, `WAITING_MESSAGES`, `BLOCKED`, `STARS` — the daemon quarantines `STARS`/`BLOCKED` and re-probes them automatically every 30 min. The probe is read-only and verifies actual membership (`channels.getParticipant` for supergroups, participant list for basic groups), so per-user bans stay quarantined instead of being reintegrated into failed sends.
@@ -187,21 +187,38 @@ state behind, and proxies hold the upstream connection open even longer).
   last poll that saw `isTelegramConnected`).
 * A user-initiated release ("Parar") ends the window immediately — the
   browser hand-back that follows is safe by design.
-* **Browser presence**: the web UI POSTs `browser-presence` every 5s with
-  `isClientConnected`. While a browser client is (or very recently was)
-  holding the session, any **remote** start — `{}` takeover or the
-  orchestration `start` command — is refused with
-  "the account is open in a web browser"; sustained concurrent use of the
-  same auth key is what Telegram punishes with 406. The report stays
-  blocking for 120s after the last beat, so background tabs (whose timers
-  browsers throttle) and just-closed tabs are covered too. The **coordinated
-  handover** (takeover *with* `sessionData` — the panel start / automation
-  reconnect, where the browser yields its client within seconds of the
-  daemon confirming) bypasses the check: that brief overlap is the flow the
-  product has always used.
-* Defense-in-depth: a 5s watcher in the web UI notices the daemon holding
-  the session while the local client is connected and hands the session
-  over (disconnect + automation mode), mirroring the panel handover.
+* **Browser presence + pending-start handshake**: the web UI POSTs
+  `browser-presence` every ~2.5s with `isClientConnected` and a
+  `sessionFingerprint` (SHA-256 prefix of the session's auth keys — both
+  sides derive it the same way). While a browser client is (or very recently
+  was) holding the session, a **remote** start — `{}` takeover or the
+  orchestration `start` command — does not fail outright anymore:
+  1. If the fingerprint of the saved session **differs** from the browser's
+     (e.g. the account re-logged in), the start is refused immediately with
+     "a sessão salva não corresponde" — only a panel start ("Iniciar") can
+     deliver the new session.
+  2. Otherwise the daemon publishes `browserPendingStart: true` in its
+     status for up to 30s and waits up to 12s: the account's tab sees the
+     flag on its next presence beat, hands the session over (disconnect +
+     automation mode) and reports `isClientConnected: false`; the daemon
+     proceeds the moment a fresh beat confirms the handover — zero overlap.
+  3. If the tab does not comply within 12s (closed, or throttled in the
+     background), the start is refused with "a interface web da conta não
+     liberou a sessão a tempo" — leave the tab visible for a few seconds
+     and retry, or use the account's own panel.
+  The presence report stays meaningful for 120s after the last beat, so
+  background tabs (whose timers browsers throttle) and just-closed tabs are
+  covered too. The **coordinated handover** (takeover *with* `sessionData` —
+  the panel start / automation reconnect, where the browser yields its
+  client within seconds of the daemon confirming) bypasses all of it: that
+  brief overlap is the flow the product has always used.
+* Defense-in-depth: the same ~2.5s watcher in the web UI notices the daemon
+  holding the session while the local client is connected and hands the
+  session over (disconnect + automation mode), mirroring the panel
+  handover. Cross-tab sync disconnects the other tabs' clients too, and the
+  browser boot/unlock never connects its client while `isRunning` or
+  `isTelegramConnected` is true (it enters automation mode instead) — that
+  includes the iOS/Safari worker health-check reconnect.
 * `AUTH_KEY_DUPLICATED` surfaces as a structured failure ("log into the
   account again") instead of a raw RPC error, and the runner never leaves an
   orphaned client behind (postmortem 72, part 1).
@@ -210,9 +227,10 @@ Runbook: a stack redeploy with armed automations is safe — the daemon
 releases the Telegram socket on SIGTERM before the container dies, and
 everything that reconnects afterwards respects the window. After a real
 crash (OOM, SIGKILL), simply wait out the countdown the UI shows before
-arming or browsing the account again. To arm remotely, the account's web UI
-must be closed or sitting in the automation screen — the daemon refuses the
-start otherwise (and tells you so in the ack). Hardening backlog (not
+arming or browsing the account again. To arm remotely with the account's
+web UI open, just click start — the tab hands the session over by itself
+within seconds; only a re-logged-in account needs one panel start first
+(the ack says exactly that). Hardening backlog (not
 built): separate authorizations per client (browser and daemon) would remove
 the shared-key fragility entirely — needs a product decision.
 
