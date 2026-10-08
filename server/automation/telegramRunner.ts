@@ -240,7 +240,19 @@ export class TelegramRunner {
       this.handleUpdate(update);
     }, eventBuilder);
 
-    await client.connect();
+    // A failed connect must not leave an orphaned client behind: a live
+    // socket keeps the auth key "in use" for Telegram, which turns every
+    // retry into AUTH_KEY_DUPLICATED until the process is restarted
+    try {
+      await client.connect();
+    } catch (err) {
+      try {
+        client.disconnect();
+      } catch {
+        // Ignore disconnect errors during cleanup
+      }
+      throw err;
+    }
     this.client = client;
 
     // Identity is cosmetic for sending but required by the orchestration

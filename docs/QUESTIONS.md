@@ -690,3 +690,17 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     (Iniciar quando parado, Parar quando rodando, estado da transição
     durante comando pendente) em vez dos dois botões sempre visíveis
     (274/274).
+
+72. **Client GramJS órfão após connect com falha — AUTH_KEY_DUPLICATED
+    permanente** — Descoberto ao vivo no deploy do item 71: o redeploy matou
+    os containers com as sessões CONECTADAS (automações rodando desde o
+    armê), e o primeiro `start` do processo novo recebeu `AUTH_KEY_DUPLICATED`
+    (a key ainda "viva" no DC após o kill abrupto). O defeito agravante:
+    `runner.start()` não limpava o client quando `client.connect()` lançava
+    — o socket ficava **órfão e vivo**, reconectando em loop para sempre, o
+    que mantinha a auth key perpetuamente "em uso" e envenenava todos os
+    retries seguintes até reiniciar o container. Correção: disconnect no
+    catch do connect (o erro segue subindo para o executor/ack, mas sem
+    deixar o órfão). Runbook de deploy: parar as automações (release limpo)
+    antes de recriar containers; com o fix, um redeploy com automação viva
+    se auto-cura após o DC liberar a key.
