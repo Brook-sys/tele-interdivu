@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { AutomationDatabase, DEFAULT_CONFIG, parseCampaignContentPayload } from './database';
@@ -68,8 +70,8 @@ describe('AutomationDatabase (in-memory SQLite)', () => {
   });
 
   it('keeps the cached overrides across a restart (degraded persistence)', () => {
-    const dbPath = '/tmp/opencode/automation-override-cache.test.db';
-    fs.rmSync(dbPath, { force: true });
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'automation-override-cache-'));
+    const dbPath = path.join(tempDir, 'automation.db');
     const db = new AutomationDatabase(dbPath);
     db.saveOrchestratorCache({ overrides: { dailyLimit: 50 }, roundTargetShare: 5 });
     db.close();
@@ -81,7 +83,7 @@ describe('AutomationDatabase (in-memory SQLite)', () => {
     expect(reopened.getEffectiveConfig().roundTargetSends).toBe(5);
     expect(reopened.getConfig().dailyLimit).toBe(DEFAULT_CONFIG.dailyLimit);
     reopened.close();
-    fs.rmSync(dbPath, { force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('validates campaign copy payloads', () => {
