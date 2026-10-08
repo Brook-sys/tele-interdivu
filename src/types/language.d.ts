@@ -2391,6 +2391,8 @@ export interface LangPair {
   'PromoOrchestrationCommandStart': undefined;
   'PromoOrchestrationCommandStop': undefined;
   'PromoOrchestrationCommandCopy': undefined;
+  'PromoOrchestrationCopyCampaign': undefined;
+  'PromoOrchestrationCopyCampaignEmpty': undefined;
   'PromoOrchestrationCommandApplied': undefined;
   'PromoOrchestrationCommandFailed': undefined;
   'PromoOrchestrationGlobalValues': undefined;
@@ -4226,6 +4228,9 @@ export interface LangPairWithVariables<V = LangVariable> {
     'account': V;
   };
   'PromoOrchestrationStopConfirm': {
+    'account': V;
+  };
+  'PromoOrchestrationCopyCampaignConfirm': {
     'account': V;
   };
   'PromoOrchestrationCommandPending': {

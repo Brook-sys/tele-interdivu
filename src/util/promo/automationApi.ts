@@ -637,3 +637,37 @@ export function sendOrchestratorCommand(
     },
   );
 }
+
+// Content-only campaign projection: local row ids never leave the origin
+// account — the target rebuilds rows with its own ids on apply
+export interface OrchestratorCampaignCopyPayload {
+  templates: { title?: string; content: string; weight?: number; isEnabled?: boolean }[];
+  links: { url: string; isEnabled?: boolean; destinationIndex?: number }[];
+  destinations?: { name: string; weight?: number; isEnabled?: boolean }[];
+}
+
+export function buildCampaignCopyPayload(campaign: AutomationCampaign): OrchestratorCampaignCopyPayload {
+  const destinationIndexById = new Map(
+    campaign.destinations.map((destination, index) => [destination.id, index]),
+  );
+  return {
+    templates: campaign.templates.map((template) => ({
+      title: template.title,
+      content: template.content,
+      weight: template.weight,
+      isEnabled: template.isEnabled,
+    })),
+    links: campaign.allLinks.map((link) => ({
+      url: link.url,
+      isEnabled: link.isEnabled,
+      destinationIndex: link.destinationId !== undefined
+        ? destinationIndexById.get(link.destinationId)
+        : undefined,
+    })),
+    destinations: campaign.destinations.map((destination) => ({
+      name: destination.name,
+      weight: destination.weight,
+      isEnabled: destination.isEnabled,
+    })),
+  };
+}

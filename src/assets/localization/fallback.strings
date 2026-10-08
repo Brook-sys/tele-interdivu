@@ -3242,6 +3242,9 @@
 "PromoOrchestrationCommandStart" = "iniciar";
 "PromoOrchestrationCommandStop" = "parar";
 "PromoOrchestrationCommandCopy" = "copiar campanha";
+"PromoOrchestrationCopyCampaign" = "Copiar campanha";
+"PromoOrchestrationCopyCampaignConfirm" = "Copiar a campanha atual (templates, links e destinos) para a conta {account}? O conteúdo atual dela é substituído e os ids locais dela são preservados. É uma cópia única — não há sincronização automática depois.";
+"PromoOrchestrationCopyCampaignEmpty" = "A campanha de origem não tem templates para copiar.";
 "PromoOrchestrationCommandPending" = "Comando {command} enviado — aguardando esta conta responder…";
 "PromoOrchestrationCommandApplied" = "Comando aplicado";
 "PromoOrchestrationCommandFailed" = "Falha ao executar o comando";

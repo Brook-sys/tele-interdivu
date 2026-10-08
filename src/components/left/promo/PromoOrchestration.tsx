@@ -9,6 +9,8 @@ import type { LangFn } from '../../../util/localization/types';
 
 import buildClassName from '../../../util/buildClassName';
 import {
+  buildCampaignCopyPayload,
+  fetchAutomationCampaign,
   fetchOrchestratorGrants,
   fetchOrchestratorInfo,
   fetchOrchestratorOverrides,
@@ -191,6 +193,28 @@ const PromoOrchestration = ({ isActive, isEmbedded, onReset }: OwnProps) => {
     setIsCommandBusy(true);
     try {
       await sendOrchestratorCommand(worker.workerId, 'stop');
+      setActionError(undefined);
+    } catch (err: any) {
+      setActionError(lang('PromoOrchestrationCommandError', { error: err.message }));
+    } finally {
+      setIsCommandBusy(false);
+    }
+  });
+
+  // One-shot manual copy of this daemon's campaign to another account: there
+  // is no automatic sync by design, and the destination rebuilds rows with
+  // its own local ids
+  const handleCopyCampaign = useLastCallback(async (worker: OrchestratorWorker) => {
+    const label = formatAccountLabel(worker.statusSnapshot?.account) || worker.workerId;
+    if (!window.confirm(lang('PromoOrchestrationCopyCampaignConfirm', { account: label }))) return;
+    setIsCommandBusy(true);
+    try {
+      const campaign = await fetchAutomationCampaign();
+      if (!campaign.templates.length) {
+        setActionError(lang('PromoOrchestrationCopyCampaignEmpty'));
+        return;
+      }
+      await sendOrchestratorCommand(worker.workerId, 'campaign-copy', buildCampaignCopyPayload(campaign));
       setActionError(undefined);
     } catch (err: any) {
       setActionError(lang('PromoOrchestrationCommandError', { error: err.message }));
@@ -509,6 +533,16 @@ const PromoOrchestration = ({ isActive, isEmbedded, onReset }: OwnProps) => {
                   >
                     {lang('PromoOrchestrationStop')}
                   </Button>
+                  {worker.workerId !== info.workerId && (
+                    <Button
+                      size="tiny"
+                      color="secondary"
+                      disabled={areActionsDisabled}
+                      onClick={() => void handleCopyCampaign(worker)}
+                    >
+                      {lang('PromoOrchestrationCopyCampaign')}
+                    </Button>
+                  )}
                 </div>
                 <div className={styles.workerUrl}>{worker.apiUrl}</div>
               </div>
