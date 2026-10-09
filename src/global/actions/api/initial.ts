@@ -12,6 +12,7 @@ import {
   TELEGRAM_API_ID,
 } from '../../../config';
 import { updateAppBadge } from '../../../util/appBadge';
+import { writeAutomationActiveHint } from '../../../util/browser/automationActiveHint';
 import { toCredentialRequestOptions } from '../../../util/browser/passkeys';
 import {
   IS_WEBAUTHN_SUPPORTED,
@@ -224,6 +225,9 @@ addActionHandler('signOut', async (global, actions, payload): Promise<void> => {
 
   actions.reset();
   await resetStorage();
+  // A fresh login must land on the chat, not on a stale automation cover
+  // left over from the previous session
+  writeAutomationActiveHint(false);
 
   const targetAccountSlot = getFirstLoggedInAccountSlot() || 1;
   if (targetAccountSlot !== (ACCOUNT_SLOT || 1)) {

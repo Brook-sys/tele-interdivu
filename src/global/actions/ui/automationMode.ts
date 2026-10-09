@@ -1,5 +1,6 @@
 import type { ActionReturnType, GlobalState } from '../../types';
 
+import { writeAutomationActiveHint } from '../../../util/browser/automationActiveHint';
 import { addActionHandler, getActions, getGlobal } from '../../index';
 
 // Cross-tab: when one tab takes over the automation session, every other tab
@@ -35,11 +36,13 @@ function getBroadcastChannel(): BroadcastChannel | undefined {
 }
 
 addActionHandler('activateAutomationMode', (global): ActionReturnType => {
+  writeAutomationActiveHint(true);
   getBroadcastChannel()?.postMessage({ isActive: true });
   return applyAutomationMode(global, true);
 });
 
 addActionHandler('deactivateAutomationMode', (global): ActionReturnType => {
+  writeAutomationActiveHint(false);
   getBroadcastChannel()?.postMessage({ isActive: false });
   return applyAutomationMode(global, false);
 });

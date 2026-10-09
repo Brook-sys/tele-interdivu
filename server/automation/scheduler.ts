@@ -165,6 +165,33 @@ const REVALIDATE_CATCHUP_INTERVAL_MS = 60_000;
 // Upper bound for how long a single orchestrator denial suppresses a group:
 // cheap re-claims keep the local view of the global timeline fresh
 const ORCHESTRATOR_DENY_CAP_SECONDS = 120;
+// The read-only probe (GetFullChannel/GetParticipant) reports some banned
+// groups as writable — re-integrating them on that alone burns send slots on
+// guaranteed failures in a loop. A ban confirmed by a real send is trusted for
+// this long before the probe may reconsider it
+const SEND_BAN_REVALIDATE_SECONDS = 24 * 3600;
+// Send-level errors that mean "this account may never post there" — the group
+// is quarantined and only a probe after SEND_BAN_REVALIDATE_SECONDS reconsiders
+const PERMANENT_WRITE_ERROR_REGEX = /CHAT_WRITE_FORBIDDEN|USER_BANNED_IN_CHANNEL|CHANNEL_PRIVATE|CHAT_RESTRICTED/;
+// A hung history check must not park the whole send loop: the group stays
+// "waiting for messages" for this cycle and the loop keeps moving
+const MESSAGE_CHECK_TIMEOUT_MS = 45_000;
+
+function isSendLevelBan(group: GroupStateRecord): boolean {
+  return group.status === 'BLOCKED'
+    && PERMANENT_WRITE_ERROR_REGEX.test(group.lastError || '')
+    && Boolean(group.blockedAt);
+}
+
+function withTimeoutMs<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 export class AutomationScheduler {
   private state: SchedulerState = {
@@ -420,6 +447,11 @@ export class AutomationScheduler {
     for (const g of unprobed) targetById.set(g.chatId, g);
 
     const queue = [...targetById.values()]
+      // Send-confirmed bans are trusted for a day: the probe reports some of
+      // them as writable, and re-integrating on that alone burns slots on
+      // guaranteed failures (postmortem 74)
+      .filter((g) => !isSendLevelBan(g)
+        || (now - (g.blockedAt! * 1000)) >= SEND_BAN_REVALIDATE_SECONDS * 1000)
       .sort((a, b) => (this.lastProbeAtByChat.get(a.chatId) || 0) - (this.lastProbeAtByChat.get(b.chatId) || 0))
       .slice(0, REVALIDATE_BATCH_SIZE);
 
@@ -503,6 +535,7 @@ export class AutomationScheduler {
         lastSentAt: g.lastSentAt,
         status: 'READY',
         lastError: undefined,
+        blockedAt: 0,
       });
       this.db.addLog({
         createdAt: serverNow,
@@ -689,7 +722,11 @@ export class AutomationScheduler {
             const meetsMessages = !g.lastSentAt
               || g.otherMessagesCount >= config.minOtherMessages
               || (this.checkMessagesCallback
-                ? (await this.checkMessagesCallback(g.chatId, config.minOtherMessages)) >= config.minOtherMessages
+                ? (await withTimeoutMs(
+                  this.checkMessagesCallback(g.chatId, config.minOtherMessages),
+                  MESSAGE_CHECK_TIMEOUT_MS,
+                  g.otherMessagesCount,
+                )) >= config.minOtherMessages
                 : false);
 
             if (!meetsMessages) {
@@ -712,7 +749,11 @@ export class AutomationScheduler {
             countWaitingMessages++;
             // Check Telegram history only if needed (debounced with 5m cache inside runner)
             if (this.checkMessagesCallback) {
-              const verifiedCount = await this.checkMessagesCallback(g.chatId, config.minOtherMessages);
+              const verifiedCount = await withTimeoutMs(
+                this.checkMessagesCallback(g.chatId, config.minOtherMessages),
+                MESSAGE_CHECK_TIMEOUT_MS,
+                g.otherMessagesCount,
+              );
               if (verifiedCount >= config.minOtherMessages) {
                 evalResult = { isEligible: true, reason: 'READY' };
                 countWaitingMessages--;
@@ -965,8 +1006,7 @@ export class AutomationScheduler {
             await this.sleep((sendResult.floodWaitSeconds + 30) * 1000, signal);
           }
         } else {
-          const isPermError = /CHAT_WRITE_FORBIDDEN|USER_BANNED_IN_CHANNEL|CHANNEL_PRIVATE|CHAT_RESTRICTED/
-            .test(sendResult.error || '');
+          const isPermError = PERMANENT_WRITE_ERROR_REGEX.test(sendResult.error || '');
           if (isPermError) {
             this.db.upsertGroupState({
               chatId: eligibleGroup.chatId,
@@ -977,6 +1017,7 @@ export class AutomationScheduler {
               lastSentAt: eligibleGroup.lastSentAt,
               status: 'BLOCKED',
               lastError: sendResult.error,
+              blockedAt: timestamp,
             });
           }
           this.db.addLog({

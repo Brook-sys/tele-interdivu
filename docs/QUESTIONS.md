@@ -796,3 +796,80 @@ confirmação ou atenção do usuário. Cada item explica o que foi feito e o im
     celular / outro navegador fora daqui) continua podendo gerar
     AUTH_KEY_DUPLICATED — Telegram não oferece isolamento por client sem
     autorizações separadas (backlog 72, exige decisão de produto).
+
+## 74. 09/10/26 — 406 às 06:16 com automação rodando (2ª aba) + scheduler queimando slots em grupos banidos
+
+**Sintomas relatados:** (1) abrir o site com a automação ligada entra na
+tela de CHAT (deveria entrar na de automação, "dando F5 ou não"), e a
+automação morre com 406 AUTH_KEY_DUPLICATED; (2) o scheduler "espera o
+cooldown de um mesmo grupo" repetidamente, e um parar/retomar na hora
+"libera 16 grupos" que antes não eram reconhecidos.
+
+**Causa raiz (reconstruída dos logs de 09/10 06:03–06:36, conta 1):**
+
+- *Bug 1 — duas brechas combinadas.* Uma 2ª aba da conta abre na tela de
+  chat (aba não-master não passava por nenhum gate de automação). O
+  "Parar" nessa 2ª aba chama `initApi()`, que o multitab broadcasta, e o
+  MASTER conecta o client **por baixo do modo automação** (zumbi: UI diz
+  "daemon é dono", client vivo). O watcher então mente nos beats
+  (`isClientConnected:false`), e o "Iniciar" seguinte usa o takeover com
+  `sessionData` — que **burlava o gate de presença** (`isCoordinatedHandover`)
+  e conectava o daemon contando que "a aba desconecta logo depois":
+  sobreposição deliberada → 406 às 06:16:35 no daemon ("outro cliente
+  assumiu"). A janela existia desde o início; a zumbi a tornou determinística.
+- *Bug 2 — reciclagem de banidos.* A sondagem reintegra grupos cujo envio
+  real falha com `USER_BANNED_IN_CHANNEL` (o `GetParticipant` da sondagem
+  reporta canWrite=true — falso positivo). Cada reintegração gasta slot +
+  pacing (30–60s) num envio que NUNCA vinga; nos logs de 09/10 isso se
+  repete às 04:48, 05:25 e 05:55 (2–3 grupos por ciclo, logo re-banidos),
+  e depois do re-arm às 06:27–06:36 houve 8 erros USER_BANNED CONSECUTIVOS
+  — um a cada ~70–90s, todos slots que os ~17 grupos prontos nunca
+  receberam. O "16 grupos disponíveis" pós-retomada é a rodada zerada
+  (retomar limpa contadores/pausas de rodada) + a rotação saindo dos
+  banidos. A pausa de rodada (meta 40 → 30 min parada) ampliou a
+  percepção de "travado".
+
+**Correções:**
+
+- *Handover universal:* takeover com sessionData agora passa pelo MESMO
+  gate do start remoto — presença fresca + conectada → fingerprint +
+  handshake `browserPendingStart` (≤12s por beat `isClientConnected:false`),
+  recusa honesta se a aba não entregar. Nenhuma conexão do daemon acontece
+  com client do navegador vivo.
+- *Zumbi impossível:* o handler do broadcast `initApi` (multitab) no master
+  com modo automação ativo consulta o daemon: rodando → recusa conectar;
+  parado → desativa o modo e conecta. Nenhum tab consegue conectar o
+  master sob a capa de automação.
+- *Aba não-master alinhada:* boot de 2ª aba sincroniza com o daemon
+  (`syncAutomationModeFromOtherTab`) — entra na tela de automação quando
+  o daemon é dono da sessão, em vez de renderizar um chat morto.
+- *Boot direto na tela certa:* hint `tweb-automation-active` em
+  localStorage (escrita em ativar/desativar, aplicada no `init` antes do
+  primeiro render) → F5/abrir o site cai DIRETO na tela de automação, sem
+  flash do chat; os gates assíncronos corrigem (desativar + reconectar com
+  segurança) quando o daemon está parado. `signOut` limpa a hint.
+- *`connectBrowserClientWhenSessionSafe` desativa o modo antes de
+  conectar* (fim do zumbi inverso) e o "Parar" do painel usa o
+  `resumeBrowserClientConnection` com gate em vez de `initApi` cru.
+- *Quarentena de banido-por-envio (24h):* `blockedAt` (novo campo em
+  `group_state`, coalesce-preservado, 0 = limpo) carimbado no erro
+  permanente de envio; a sondagem NÃO repõe esses grupos por 24h
+  (`SEND_BAN_REVALIDATE_SECONDS`) — blocos classificados só pela sondagem
+  (canal inacessível) mantêm a cadência de 30min, e estrelas idem.
+- *Anti-travamento:* os dois `checkMessagesCallback` do loop de
+  elegibilidade têm timeout de 45s (`MESSAGE_CHECK_TIMEOUT_MS`) — um
+  GetHistory pendurado não congela mais o scheduler inteiro (o grupo fica
+  "aguardando mensagens" naquele ciclo e o loop segue).
+
+Validação: 292/292 no vitest (3 testes novos de quarentena em
+`scheduler.test.ts`, 1 teste de bypass removido em `sessionSafety.test.ts`
+— o takeover agora é a mesma branch já coberta pelo handshake), tsc e
+eslint limpos.
+
+Ressalvas: (a) o takeover com aba conectada agora espera o beat de yield
+(~3–5s típicos, ≤12s pior caso) — custo humano aceitável por sessão
+preservada; (b) banidos reais só voltam após 24h OU se a sondagem os
+liberar depois disso — grupos que desbanirem no mesmo dia ficam de fora
+até lá (deliberado: o falso positivo da sondagem custa slots reais);
+(c) a ressalva permanente do item 73 (conta aberta em outro cliente
+Telegram fora deste produto) continua valendo.

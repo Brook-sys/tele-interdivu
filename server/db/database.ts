@@ -115,6 +115,9 @@ export interface GroupStateRecord {
   starsCost: number;
   status: 'READY' | 'WAITING_SLOWMODE' | 'WAITING_MESSAGES' | 'BLOCKED' | 'STARS' | 'SENT';
   lastError?: string;
+  // Unix seconds of the last send-level permanent block (USER_BANNED etc).
+  // Probe-only blocks leave it unset so they keep the fast revalidation cadence
+  blockedAt?: number;
   updatedAt: number;
 }
 
@@ -301,6 +304,7 @@ export class AutomationDatabase {
         stars_cost INTEGER NOT NULL DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'READY',
         last_error TEXT,
+        blocked_at INTEGER,
         updated_at INTEGER NOT NULL
       );
 
@@ -393,6 +397,11 @@ export class AutomationDatabase {
     }
     try {
       this.db.exec('ALTER TABLE group_state ADD COLUMN stars_cost INTEGER NOT NULL DEFAULT 0');
+    } catch {
+      // Column already exists
+    }
+    try {
+      this.db.exec('ALTER TABLE group_state ADD COLUMN blocked_at INTEGER');
     } catch {
       // Column already exists
     }
@@ -1370,8 +1379,8 @@ export class AutomationDatabase {
     this.db.prepare(`
       INSERT INTO group_state (
         chat_id, title, access_hash, last_sent_at, other_messages_count, slowmode_seconds,
-        slowmode_next_send_date, stars_cost, status, last_error, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        slowmode_next_send_date, stars_cost, status, last_error, blocked_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(chat_id) DO UPDATE SET
         title = excluded.title,
         access_hash = coalesce(excluded.access_hash, group_state.access_hash),
@@ -1382,6 +1391,7 @@ export class AutomationDatabase {
         stars_cost = excluded.stars_cost,
         status = excluded.status,
         last_error = excluded.last_error,
+        blocked_at = coalesce(excluded.blocked_at, group_state.blocked_at),
         updated_at = excluded.updated_at
     `).run(
       record.chatId,
@@ -1394,6 +1404,7 @@ export class AutomationDatabase {
       record.starsCost || 0,
       record.status,
       record.lastError ?? null,
+      record.blockedAt ?? null,
       now,
     );
   }
@@ -1479,6 +1490,7 @@ export class AutomationDatabase {
       starsCost: Number(row.stars_cost || 0),
       status: row.status,
       lastError: row.last_error ? String(row.last_error) : undefined,
+      blockedAt: row.blocked_at ? Number(row.blocked_at) : undefined,
       updatedAt: Number(row.updated_at),
     }));
   }
@@ -1497,6 +1509,7 @@ export class AutomationDatabase {
       starsCost: Number(row.stars_cost || 0),
       status: row.status,
       lastError: row.last_error ? String(row.last_error) : undefined,
+      blockedAt: row.blocked_at ? Number(row.blocked_at) : undefined,
       updatedAt: Number(row.updated_at),
     };
   }

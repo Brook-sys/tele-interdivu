@@ -2,6 +2,7 @@ import './intervals';
 
 import type { ActionReturnType, GlobalState } from './types';
 
+import { isAutomationActiveHintSet } from '../util/browser/automationActiveHint';
 import { IS_MULTIACCOUNT_SUPPORTED } from '../util/browser/globalEnvironment';
 import { isCacheApiSupported } from '../util/cacheApi';
 import { getCurrentTabId, reestablishMasterToSelf } from '../util/establishMultitabRole';
@@ -10,6 +11,7 @@ import { cloneDeep } from '../util/iteratees';
 import { isLocalMessageId } from '../util/keys/messageKey';
 import { Bundles, loadBundle } from '../util/moduleLoader';
 import { parseLocationHash } from '../util/routing';
+import { hasStoredSession } from '../util/sessions';
 import { updatePeerColors } from '../util/theme';
 import { initializeChatMediaSearchResults } from './reducers/middleSearch';
 import { updateTabState } from './reducers/tabs';
@@ -137,6 +139,17 @@ addActionHandler('init', (global, actions, payload): ActionReturnType => {
 
   if (global.peerColors) {
     updatePeerColors(global.peerColors.general);
+  }
+
+  // Land directly on the automation screen when it was active in this browser:
+  // rendering the chat UI first (even briefly) invites interactions that
+  // fight the daemon for the auth key. The async boot gates verify the hint
+  // and hand the session back when the daemon is actually stopped
+  if (isAutomationActiveHintSet() && hasStoredSession() && !global.automationMode.isActive) {
+    global = {
+      ...global,
+      automationMode: { isActive: true },
+    };
   }
 
   return updateTabState(global, {

@@ -196,9 +196,9 @@ const AutomationMode = ({ showIntroTransition }: StateProps) => {
       await startAutomationTakeover({ sessionData, targetChats: [] });
       unmarkDaemonFailed();
       setReconnectError(undefined);
-      // After a re-login the browser client may own the session — hand it
-      // to the daemon exactly like the panel start does; the takeover went
-      // through as a coordinated handover
+      // After a re-login the browser client may own the session — the
+      // takeover waits for this tab's watcher to hand it over, so dropping
+      // the local client right away just makes the handshake resolve sooner
       try {
         await callApi('disconnect');
       } catch {

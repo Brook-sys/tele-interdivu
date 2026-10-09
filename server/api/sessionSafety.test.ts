@@ -193,16 +193,6 @@ describe('session safety cooldown', () => {
     }
   });
 
-  it('allows a coordinated handover (takeover with sessionData) with the browser connected', async () => {
-    const { db, runner, scheduler } = createStack();
-    db.saveStateJson(BROWSER_PRESENCE_KEY, { at: nowSeconds(), isClientConnected: true });
-    const result = await startAutomationFromSavedState(db, runner, scheduler, {
-      isCoordinatedHandover: true,
-    });
-    expect(result.success).toBe(true);
-    expect(runner.start).toHaveBeenCalledTimes(1);
-  });
-
   it('allows a remote start once the browser presence is stale', async () => {
     const { db, runner, scheduler } = createStack();
     db.saveStateJson(BROWSER_PRESENCE_KEY, { at: nowSeconds() - 121, isClientConnected: true });

@@ -11,6 +11,7 @@ import { getActions, withGlobal } from '../../../global';
 import type { ApiChat, ApiChatFolder, ApiChatFullInfo } from '../../../api/types';
 import type { PromoChatStatus, PromoSettings } from '../../../global/types/promo';
 
+import { resumeBrowserClientConnection } from '../../../global/actions/ui/initial';
 import { selectPromoSettings, selectPromoUserState } from '../../../global/selectors/promo';
 import buildClassName from '../../../util/buildClassName';
 import { copyTextToClipboard } from '../../../util/clipboard';
@@ -113,7 +114,6 @@ const PromoAutomation = ({
   fullInfoById,
   promoStatusById,
 }: OwnProps & StateProps) => {
-  const { initApi } = getActions();
   const lang = useLang();
 
   const [activeTab, setActiveTab] = useState<TabType>('campaign');
@@ -354,13 +354,10 @@ const PromoAutomation = ({
       // 1. Stop backend daemon and release session
       await stopAutomationRelease();
 
-      // 2. Reconnect browser client and leave the full-screen mode
-      initApi();
-      if (isEmbedded) {
-        const { deactivateAutomationMode } = getActions();
-        deactivateAutomationMode();
-      }
-
+      // 2. Reconnect browser client and leave the full-screen mode — the
+      // gated resume checks the daemon again, waits out the reconnect
+      // cooldown when needed, and never connects on top of a live daemon
+      await resumeBrowserClientConnection();
       await loadStatusAndData();
     } catch (err: any) {
       setActionError(err.message);

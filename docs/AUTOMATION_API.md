@@ -208,10 +208,12 @@ state behind, and proxies hold the upstream connection open even longer).
      and retry, or use the account's own panel.
   The presence report stays meaningful for 120s after the last beat, so
   background tabs (whose timers browsers throttle) and just-closed tabs are
-  covered too. The **coordinated handover** (takeover *with* `sessionData` —
-  the panel start / automation reconnect, where the browser yields its
-  client within seconds of the daemon confirming) bypasses all of it: that
-  brief overlap is the flow the product has always used.
+  covered too. The takeover *with* `sessionData` (panel start / automation
+  reconnect) runs the **same gate**: the panel's tab hands the session over
+  via its own watcher beat, and the daemon connects only after the beat
+  confirms. No start path connects while a browser client is live — the
+  short overlap the flow used to allow is what destroyed a session on
+  09/10 (postmortem 74).
 * Defense-in-depth: the same ~2.5s watcher in the web UI notices the daemon
   holding the session while the local client is connected and hands the
   session over (disconnect + automation mode), mirroring the panel

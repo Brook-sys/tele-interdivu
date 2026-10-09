@@ -80,8 +80,12 @@ const SESSION_SAFETY_POLL_MS = 15_000;
 const SESSION_SAFETY_MAX_POLLS = 12;
 
 async function connectBrowserClientWhenSessionSafe(pollCount = 0) {
-  const { initApi, activateAutomationMode } = getActions();
+  const { initApi, activateAutomationMode, deactivateAutomationMode } = getActions();
   if (!hasStoredSession() || pollCount >= SESSION_SAFETY_MAX_POLLS) {
+    // Connecting means the daemon does not own the session: lift the
+    // automation cover (a stale boot hint may have set it) so the UI and
+    // the connection state stay consistent
+    deactivateAutomationMode();
     initApi();
     return;
   }
@@ -93,6 +97,7 @@ async function connectBrowserClientWhenSessionSafe(pollCount = 0) {
     return;
   }
   if (status && status.sessionSafetyWaitSeconds <= 0) {
+    deactivateAutomationMode();
     initApi();
     return;
   }
@@ -217,6 +222,10 @@ addActionHandler('switchMultitabRole', async (global, actions, payload): Promise
     destroySharedStatePort();
     clearCaching();
     actions.onSomeTabSwitchedMultitabRole();
+    // A non-master tab never owns the client, but it must still cover the
+    // UI while the daemon owns the session: showing the chat screen invites
+    // interactions that fight the daemon for the auth key (postmortem 74)
+    actions.syncAutomationModeFromOtherTab();
   } else {
     if (global.passcode.hasPasscode && !global.passcode.isScreenLocked) {
       const { sessionJson } = await decryptSessionByCurrentHash();

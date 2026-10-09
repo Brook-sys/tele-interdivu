@@ -221,6 +221,26 @@ export function handleMessage({ data }: { data: BroadcastChannelMessage }) {
       if (!selectTabState(global).isMasterTab) return;
 
       const { initialArgs } = data;
+      // Another tab asked the master to connect (e.g. the panel hand-back
+      // after "Parar"). The master may currently be covered by the
+      // automation screen: connecting underneath it would leave a live
+      // client under a "daemon owns the session" UI — the presence beats
+      // would then lie about being disconnected and the next takeover
+      // would duplicate the auth key (postmortem 74)
+      if (global.automationMode.isActive) {
+        void fetch('/api/v1/automation/status')
+          .then((res) => (res.ok ? res.json() : undefined))
+          .then((status) => {
+            if (status && (status.isRunning || status.isTelegramConnected)) {
+              // Daemon still owns the session: refuse to connect anything
+              return;
+            }
+            getActions().deactivateAutomationMode();
+            initApi(getActions().apiUpdate, initialArgs);
+          })
+          .catch(() => undefined);
+        return;
+      }
       initApi(getActions().apiUpdate, initialArgs);
       break;
     }

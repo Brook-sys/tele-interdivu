@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   AutomationScheduler,
@@ -325,6 +325,60 @@ describe('quarantine revalidation', () => {
     await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
 
     expect(upserts).toHaveLength(0);
+  });
+
+  it('does not probe a send-confirmed ban within 24h even if the probe would clear it', async () => {
+    const group = {
+      chatId: '-5', title: 'Grupo Banido por Envio', otherMessagesCount: 0, slowmodeSeconds: 0,
+      starsCost: 0, status: 'BLOCKED',
+      lastError: 'RPCError 400: USER_BANNED_IN_CHANNEL (caused by messages.SendMessage)',
+      blockedAt: Math.floor(Date.now() / 1000) - 3600, updatedAt: 1,
+    };
+    const { db, upserts } = createDbStub([group]);
+    const probe = vi.fn(() => Promise.resolve({ canWrite: true, starsCost: 0 }));
+    const scheduler = createScheduler(db, probe);
+
+    await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
+
+    // The probe reported false positives for send-banned groups before — a
+    // real send error is trusted for a day (postmortem 74)
+    expect(probe).not.toHaveBeenCalled();
+    expect(upserts).toHaveLength(0);
+  });
+
+  it('probes a send-confirmed ban again after 24h and clears the marker on reintegrate', async () => {
+    const group = {
+      chatId: '-6', title: 'Grupo Banido por Envio', otherMessagesCount: 0, slowmodeSeconds: 0,
+      starsCost: 0, status: 'BLOCKED',
+      lastError: 'RPCError 400: USER_BANNED_IN_CHANNEL (caused by messages.SendMessage)',
+      blockedAt: Math.floor(Date.now() / 1000) - 25 * 3600, updatedAt: 1,
+    };
+    const { db, upserts } = createDbStub([group]);
+    const scheduler = createScheduler(db, () => Promise.resolve({ canWrite: true, starsCost: 0 }));
+
+    await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
+
+    expect(upserts).toHaveLength(1);
+    expect(upserts[0].status).toBe('READY');
+    expect(upserts[0].blockedAt).toBe(0);
+  });
+
+  it('keeps probing probe-classified blocks at the fast cadence', async () => {
+    const group = {
+      chatId: '-7', title: 'Grupo Fechado na Sondagem', otherMessagesCount: 0, slowmodeSeconds: 0,
+      starsCost: 0, status: 'BLOCKED',
+      lastError: 'Canal inacessível na revalidação',
+      updatedAt: Math.floor(Date.now() / 1000) - 60,
+    };
+    const { db, upserts } = createDbStub([group]);
+    const scheduler = createScheduler(db, () => Promise.resolve({ canWrite: true, starsCost: 0 }));
+
+    await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
+
+    // Not a send-confirmed ban: the probe decides, and a writable result
+    // reintegrates immediately
+    expect(upserts).toHaveLength(1);
+    expect(upserts[0].status).toBe('READY');
   });
 });
 

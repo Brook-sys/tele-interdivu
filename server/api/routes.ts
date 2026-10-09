@@ -214,7 +214,6 @@ export async function startAutomationFromSavedState(
   db: AutomationDatabase,
   runner: TelegramRunner,
   scheduler: AutomationScheduler,
-  options?: { isCoordinatedHandover?: boolean },
 ): Promise<AutomationStartResult> {
   // Never reconnect while the Telegram server may still consider the auth
   // key in use: a refused start is recoverable (retry later), a duplicated
@@ -250,11 +249,12 @@ export async function startAutomationFromSavedState(
     return { success: false, message: 'No targetChats provided and no groups saved — start from the web UI first' };
   }
 
-  // A remote start must never race the web UI for the session: two live
-  // users of the same auth key destroy it. Only the coordinated handover
-  // (takeover with sessionData, where the browser yields its client right
-  // after the daemon confirms) may connect while a browser client is live
-  if (!options?.isCoordinatedHandover && getIsBrowserClientConnected(db)) {
+  // No start may race the web UI for the session: two live users of the same
+  // auth key destroy it (AUTH_KEY_DUPLICATED). The panel takeover previously
+  // bypassed this gate trusting the browser to "disconnect right after" — the
+  // overlap window killed the daemon (postmortem 74). Every start now waits
+  // for a fresh presence beat that reports the browser disconnected
+  if (getIsBrowserClientConnected(db)) {
     const presence = getBrowserPresence(db);
     const savedFingerprint = buildSessionFingerprint(sessionData);
     const browserFingerprint = presence?.sessionFingerprint;
@@ -434,9 +434,7 @@ export function createApiHandler(
           });
         }
 
-        const result = await startAutomationFromSavedState(db, runner, scheduler, {
-          isCoordinatedHandover: Boolean(body.sessionData),
-        });
+        const result = await startAutomationFromSavedState(db, runner, scheduler);
         if (!result.success) {
           sendError(res, 400, result.message);
           return true;
