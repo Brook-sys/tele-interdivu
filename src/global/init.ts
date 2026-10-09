@@ -34,6 +34,9 @@ addActionHandler('initShared', async (prevGlobal, actions, payload): Promise<voi
 
 addActionHandler('init', (global, actions, payload): ActionReturnType => {
   const { tabId = getCurrentTabId(), isMasterTab } = payload || {};
+  // Re-inits (e.g. passcode unlock) must not restart the boot decision: the
+  // unlock flow has its own gated resume
+  const isFreshTabBoot = !global.byTabId[tabId];
 
   const initialTabState = cloneDeep(INITIAL_TAB_STATE);
   initialTabState.id = tabId;
@@ -143,13 +146,22 @@ addActionHandler('init', (global, actions, payload): ActionReturnType => {
 
   // Land directly on the automation screen when it was active in this browser:
   // rendering the chat UI first (even briefly) invites interactions that
-  // fight the daemon for the auth key. The async boot gates verify the hint
-  // and hand the session back when the daemon is actually stopped
-  if (isAutomationActiveHintSet() && hasStoredSession() && !global.automationMode.isActive) {
-    global = {
-      ...global,
-      automationMode: { isActive: true },
-    };
+  // fight the daemon for the auth key. Without the hint the daemon status is
+  // unknown at the first paint, so the tab stays on the boot loading screen
+  // until the async gates hand it to the automation screen or to the chat
+  // (postmortem 74)
+  if (isFreshTabBoot && hasStoredSession() && !global.automationMode.isActive) {
+    if (isAutomationActiveHintSet()) {
+      global = {
+        ...global,
+        automationMode: { isActive: true },
+      };
+    } else {
+      global = {
+        ...global,
+        automationMode: { isActive: false, isPendingDecision: true },
+      };
+    }
   }
 
   return updateTabState(global, {

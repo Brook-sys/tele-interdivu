@@ -213,6 +213,9 @@ export type GlobalState = {
     isActive: boolean;
     // Browser shows the animated "preparation" sequence when set
     showIntroTransition?: boolean;
+    // Boot: the daemon status is still unknown — the chat must not render
+    // until the boot gates decide (postmortem 74)
+    isPendingDecision?: boolean;
   };
 
   chats: {

@@ -882,3 +882,22 @@ TEXTO do `lastError` — e a propagação de quarentena global do orquestrador
 orquestrador (blocked)" logo após o carimbo. Corrigido na hora: o critério é
 o marcador `blockedAt` (só escrito por erro real de envio), não o texto.
 Teste de regressão adicionado (293/293).
+
+**Achado do teste do dono (09/10 09:0x):** com a automação rodando, abrir o
+site ainda caía na tela de chat. Os daemons sobreviveram (nenhum 406 — o
+client do navegador nunca conectou), ou seja, o browser rodou o build
+ANTIGO: o nginx não enviava `Cache-Control` no `index.html`, então o cache
+heurístico do HTTP (fração do tempo desde o `Last-Modified` — horas) servia o
+HTML anterior, cujos assets hasheados continuavam vivos no cache do service
+worker. Nenhum gate da correção existia no bundle que o usuário executou.
+Corrigido em duas frentes: (a) o shell agora sai com `Cache-Control:
+no-cache` (revalidação com 304 barato) e a API de automação com `no-store`
+(status lido pelos gates nunca sai de cache heurístico) — todo deploy futuro
+chega de fato ao navegador; (b) o primeiro paint nunca mais mostra o chat
+enquanto a posse da sessão está em aberto: sem hint, o boot segura a tela
+de loading (`automationMode.isPendingDecision`) até os gates entregarem a
+tela de automação ou liberarem o chat, e o sync de aba não-master re tenta
+por ~25s antes de liberar o boot pendente (um fetch falho não estaciona a
+aba num chat morto nem derruba uma capa ativa). Re-inits (desbloqueio de
+PIN) não religam o pendente; campos transitórios não vazam pelo cache
+global (normalização em `cache.ts`).

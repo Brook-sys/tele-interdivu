@@ -291,9 +291,11 @@ function unsafeMigrateCache(cached: GlobalState, initialState: GlobalState) {
     ...cached.promo,
   };
 
-  if (!cached.automationMode) {
-    cached.automationMode = initialState.automationMode;
-  }
+  // Only the cover flag survives a reload; transient fields (intro
+  // transition, boot pending) never leak into the next session
+  cached.automationMode = {
+    isActive: Boolean(cached.automationMode?.isActive),
+  };
 
   if (!cached.chats.similarChannelsById) {
     cached.chats.similarChannelsById = initialState.chats.similarChannelsById;

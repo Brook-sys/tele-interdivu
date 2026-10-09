@@ -44,6 +44,7 @@ import styles from './App.module.scss';
 type StateProps = {
   authState: GlobalState['auth']['state'];
   isAutomationModeActive: boolean;
+  isAutomationPendingDecision?: boolean;
   isScreenLocked?: boolean;
   hasPasscode?: boolean;
   inactiveReason?: 'auth' | 'otherClient';
@@ -60,6 +61,7 @@ enum AppScreens {
   automation,
   lock,
   inactive,
+  loading,
 }
 
 const TRANSITION_RENDER_COUNT = Object.keys(AppScreens).length / 2;
@@ -69,6 +71,7 @@ const INACTIVE_PAGE_TITLE = `${ACTIVE_PAGE_TITLE} ${INACTIVE_MARKER}`;
 const App = ({
   authState,
   isAutomationModeActive,
+  isAutomationPendingDecision,
   isScreenLocked,
   hasPasscode,
   inactiveReason,
@@ -144,6 +147,11 @@ const App = ({
   } else if (isScreenLocked) {
     page = 'lock';
     activeKey = AppScreens.lock;
+  } else if (isAutomationPendingDecision && hasStoredSession()) {
+    // Daemon ownership is still being checked: the boot loading screen is
+    // the only honest first paint — a chat flash invites AUTH_KEY_DUPLICATED
+    page = 'main';
+    activeKey = AppScreens.loading;
   } else if (isAutomationModeActive && hasStoredSession()) {
     // Daemon owns the Telegram session; the chat client stays disconnected
     // so AUTH_KEY_DUPLICATED is structurally impossible.
@@ -223,6 +231,8 @@ const App = ({
         return <LockScreen isLocked={isScreenLocked} />;
       case AppScreens.inactive:
         return <AppInactive inactiveReason={inactiveReason!} />;
+      case AppScreens.loading:
+        return undefined;
     }
   }
 
@@ -287,6 +297,7 @@ export default withGlobal(
     return {
       authState,
       isAutomationModeActive: global.automationMode.isActive,
+      isAutomationPendingDecision: global.automationMode.isPendingDecision,
       isScreenLocked: global.passcode?.isScreenLocked,
       hasPasscode: global.passcode?.hasPasscode,
       inactiveReason: selectTabState(global).inactiveReason,
