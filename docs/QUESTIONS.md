@@ -901,3 +901,24 @@ por ~25s antes de liberar o boot pendente (um fetch falho não estaciona a
 aba num chat morto nem derruba uma capa ativa). Re-inits (desbloqueio de
 PIN) não religam o pendente; campos transitórios não vazam pelo cache
 global (normalização em `cache.ts`).
+
+## 75. 09/10/26 — Exportação do extrator truncava em 500 linhas
+
+Sintoma: a aba de convites contabilizava 3910 links, mas o TXT exportado
+trazia apenas 500 — idem nas outras abas (o CSV usa o mesmo caminho).
+
+Causa: `getExtractedItems` aplicava `Math.min(500, limit)` sobre QUALQUER
+limite pedido pela rota (`database.ts`) — a exportação pedia 5000 e recebia
+500. A contagem da aba vem de `extract/stats` (`COUNT(*)` por kind, sem
+limite), então o número visível era honesto e o arquivo era o mentiroso.
+
+Correção: o limite deixa de ser política do método de banco — omitido =
+todas as linhas correspondentes (sem cláusula `LIMIT`), explícito = honrado
+exatamente. A política interativa (janela de recentes) mora na rota:
+`extract/links` usa default 100 e teto 500 (`EXTRACT_LIST_*`); `extract/
+export` não passa limite e entrega a colheita completa por kind. A UI não
+mudou (continua pedindo janela de 200 + contador das stats).
+
+Validação: teste de regressão em `routes.test.ts` semeia 550 itens e exige
+TXT com 550 linhas (sem duplicatas), CSV com 551 (header incluso) e a lista
+paginada em 500 — 294/294 no vitest, tsc e eslint limpos.

@@ -1602,11 +1602,17 @@ export class AutomationDatabase {
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const orderBy = options.orderBy === 'times_seen' ? 'times_seen DESC' : 'last_seen_at DESC';
-    const limit = Math.min(500, Math.max(1, options.limit ?? 100));
+    // An omitted limit means "every matching row" — exports must never
+    // silently truncate behind a ceiling the caller cannot see
+    const limit = options.limit !== undefined ? Math.max(1, options.limit) : undefined;
 
-    const rows = this.db.prepare(`
-      SELECT * FROM extracted_items ${where} ORDER BY ${orderBy} LIMIT ?
-    `).all(...params, limit) as any[];
+    const rows = (limit !== undefined
+      ? this.db.prepare(`
+        SELECT * FROM extracted_items ${where} ORDER BY ${orderBy} LIMIT ?
+      `).all(...params, limit)
+      : this.db.prepare(`
+        SELECT * FROM extracted_items ${where} ORDER BY ${orderBy}
+      `).all(...params)) as any[];
 
     return rows.map((row) => ({
       kind: String(row.kind),

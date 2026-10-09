@@ -16,6 +16,11 @@ import { readJsonBody, sendError, sendJson } from './httpHelper';
 const TEST_SEND_COOLDOWN_MS = 15_000;
 let lastTestSendAt = 0;
 
+// Interactive extractor list: a bounded window of recent items (the tab
+// counter comes from extract/stats, which counts every row)
+const EXTRACT_LIST_DEFAULT_LIMIT = 100;
+const EXTRACT_LIST_MAX_LIMIT = 500;
+
 // After the daemon ends with the session connected and no user-initiated
 // release (crash, SIGKILL, container recreate), the Telegram server can keep
 // the auth key "in use" for a while — proxies make the window worse, since
@@ -474,11 +479,11 @@ export function createApiHandler(
 
       // 4b. Extractor: links extracted passively from target group messages
       if (route === 'extract/links' && method === 'GET') {
+        const requestedLimit = Number(parsedUrl.searchParams.get('limit')) || EXTRACT_LIST_DEFAULT_LIMIT;
         const items = db.getExtractedItems({
           kind: parsedUrl.searchParams.get('kind') || undefined,
           query: parsedUrl.searchParams.get('q') || undefined,
-          limit: parsedUrl.searchParams.get('limit')
-            ? Number(parsedUrl.searchParams.get('limit')) : undefined,
+          limit: Math.min(EXTRACT_LIST_MAX_LIMIT, Math.max(1, requestedLimit)),
           orderBy: parsedUrl.searchParams.get('sort') === 'seen' ? 'times_seen' : 'last_seen_at',
         });
         sendJson(res, 200, items);
@@ -495,7 +500,9 @@ export function createApiHandler(
 
       if (route === 'extract/export' && method === 'GET') {
         const kind = parsedUrl.searchParams.get('kind') || undefined; // omitted = all kinds
-        const items = db.getExtractedItems({ kind, limit: 5000 });
+        // No limit: an export delivers every matching row — a truncated
+        // export silently lies about the harvest
+        const items = db.getExtractedItems({ kind });
 
         const toIso = (epoch?: number) => (epoch ? new Date(epoch * 1000).toISOString() : '');
         if (parsedUrl.searchParams.get('format') === 'csv') {

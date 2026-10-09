@@ -514,6 +514,45 @@ describe('Extractor REST API', () => {
     expect(after.data).toHaveLength(1);
     expect(after.data[0].kind).toBe('external_link');
   });
+
+  it('exports every extracted item even beyond the interactive list cap', async () => {
+    const EXPORT_SEED_COUNT = 550;
+
+    // Drop leftovers from the previous case so the counts below are exact
+    exDb.clearExtractedItems('external_link');
+
+    for (let i = 0; i < EXPORT_SEED_COUNT; i++) {
+      exDb.upsertExtractedItem({
+        kind: 'external_link',
+        value: `example.com/bulk-${i}`,
+        domain: 'example.com',
+        sourceChatId: '-1007',
+        sourceChatTitle: 'Grupo Bulk',
+      });
+    }
+
+    // The interactive list stays a bounded window
+    const list = await exApi(`extract/links?kind=external_link&limit=100000`);
+    expect(list.status).toBe(200);
+    expect(list.data).toHaveLength(500);
+
+    // The TXT export delivers the full harvest, no silent truncation
+    const text = await fetch(`http://127.0.0.1:${exPort}/api/v1/automation/extract/export?kind=external_link`);
+    expect(text.status).toBe(200);
+    const textLines = (await text.text()).trim().split('\n');
+    expect(textLines).toHaveLength(EXPORT_SEED_COUNT);
+    expect(new Set(textLines).size).toBe(EXPORT_SEED_COUNT);
+
+    // Same for CSV: header + one row per item
+    const csv = await fetch(
+      `http://127.0.0.1:${exPort}/api/v1/automation/extract/export?kind=external_link&format=csv`,
+    );
+    expect(csv.status).toBe(200);
+    const csvLines = (await csv.text()).trim().split('\n');
+    expect(csvLines).toHaveLength(EXPORT_SEED_COUNT + 1);
+
+    exDb.clearExtractedItems('external_link');
+  });
 });
 
 describe('Extractor resolve & CSV export', () => {
