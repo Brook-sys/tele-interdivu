@@ -346,6 +346,26 @@ describe('quarantine revalidation', () => {
     expect(upserts).toHaveLength(0);
   });
 
+  it('keeps a send-confirmed ban quarantined even after the orchestrator overwrites lastError', async () => {
+    // Found live on 09/10: the local send marks BLOCKED + blockedAt, then the
+    // master's global-quarantine propagation rewrites lastError — the marker,
+    // not the text, must decide the 24h hold
+    const group = {
+      chatId: '-8', title: 'Grupo Rebanido', otherMessagesCount: 0, slowmodeSeconds: 0,
+      starsCost: 0, status: 'BLOCKED',
+      lastError: 'Quarentena global via orquestrador (blocked)',
+      blockedAt: Math.floor(Date.now() / 1000) - 600, updatedAt: 1,
+    };
+    const { db, upserts } = createDbStub([group]);
+    const probe = vi.fn(() => Promise.resolve({ canWrite: true, starsCost: 0 }));
+    const scheduler = createScheduler(db, probe);
+
+    await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
+
+    expect(probe).not.toHaveBeenCalled();
+    expect(upserts).toHaveLength(0);
+  });
+
   it('probes a send-confirmed ban again after 24h and clears the marker on reintegrate', async () => {
     const group = {
       chatId: '-6', title: 'Grupo Banido por Envio', otherMessagesCount: 0, slowmodeSeconds: 0,

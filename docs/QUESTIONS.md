@@ -873,3 +873,12 @@ liberar depois disso — grupos que desbanirem no mesmo dia ficam de fora
 até lá (deliberado: o falso positivo da sondagem custa slots reais);
 (c) a ressalva permanente do item 73 (conta aberta em outro cliente
 Telegram fora deste produto) continua valendo.
+
+**Achado da validação ao vivo (09/10 08:2x):** na primeira execução do build
+novo, o `blockedAt` foi carimbado nos horários exatos dos erros de envio
+(schema novo confirmado no ar), mas o critério de quarentena ainda olhava o
+TEXTO do `lastError` — e a propagação de quarentena global do orquestrador
+(`coordinator.applyReport`) sobrescreve esse texto com "Quarentena global via
+orquestrador (blocked)" logo após o carimbo. Corrigido na hora: o critério é
+o marcador `blockedAt` (só escrito por erro real de envio), não o texto.
+Teste de regressão adicionado (293/293).

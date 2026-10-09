@@ -177,10 +177,12 @@ const PERMANENT_WRITE_ERROR_REGEX = /CHAT_WRITE_FORBIDDEN|USER_BANNED_IN_CHANNEL
 // "waiting for messages" for this cycle and the loop keeps moving
 const MESSAGE_CHECK_TIMEOUT_MS = 45_000;
 
+// The marker (`blockedAt`) is the factual criterion — `lastError` text gets
+// overwritten by the orchestrator's global-quarantine propagation
+// ("Quarentena global via orquestrador"), which would let the probe recycle
+// a send-confirmed ban (found live on 09/10 validation)
 function isSendLevelBan(group: GroupStateRecord): boolean {
-  return group.status === 'BLOCKED'
-    && PERMANENT_WRITE_ERROR_REGEX.test(group.lastError || '')
-    && Boolean(group.blockedAt);
+  return group.status === 'BLOCKED' && Boolean(group.blockedAt);
 }
 
 function withTimeoutMs<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
