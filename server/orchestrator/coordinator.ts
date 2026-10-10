@@ -315,12 +315,15 @@ export class OrchestratorCoordinator {
     }));
   }
 
-  getAggregatedStats(serverNow: number) {
+  getAggregatedStats(serverNow: number, selfWorkerId?: string) {
     const workers = this.listWorkers();
     const alive = workers.filter((worker) => serverNow - worker.lastHeartbeatAt <= HEARTBEAT_TTL_SECONDS);
 
     let totalToday = this.db.getTodaySentCount(serverNow);
     for (const worker of alive) {
+      // The fresh count above already covers the coordinator's own sends; its
+      // self-registration snapshot must not be added a second time
+      if (worker.workerId === selfWorkerId) continue;
       const snapshot = worker.statusSnapshot as { todaySent?: number } | undefined;
       totalToday += snapshot?.todaySent ?? 0;
     }

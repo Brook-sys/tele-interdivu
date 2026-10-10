@@ -400,6 +400,47 @@ describe('quarantine revalidation', () => {
     expect(upserts).toHaveLength(1);
     expect(upserts[0].status).toBe('READY');
   });
+
+  it('does not keep the backlog cadence armed while a send-held group awaits its hold', async () => {
+    // Found live on 10/10: held groups are filtered out of the probe queue but
+    // still counted as "awaiting first probe", so the 60s backlog cadence
+    // never relaxed and the quarantined set was re-probed every ~2 minutes
+    // instead of every 30 (postmortem 75)
+    const held = {
+      chatId: '-9', title: 'Grupo em Holding', otherMessagesCount: 0, slowmodeSeconds: 0,
+      starsCost: 0, status: 'BLOCKED',
+      blockedAt: Math.floor(Date.now() / 1000) - (24 * 3600 - 30 * 60), updatedAt: 1,
+    };
+    const stars = {
+      chatId: '-10', title: 'Grupo Estrelas', otherMessagesCount: 0, slowmodeSeconds: 0,
+      starsCost: 10, status: 'STARS', updatedAt: 1,
+    };
+    const { db } = createDbStub([held, stars]);
+    const probe = vi.fn(() => Promise.resolve({ canWrite: false }));
+    const scheduler = createScheduler(db, probe);
+
+    vi.useFakeTimers();
+    try {
+      await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
+      // Only the STARS group is probeable on the first pass
+      expect(probe).toHaveBeenCalledTimes(1);
+
+      // Past the 60s backlog cadence, far short of the 30m revalidation: the
+      // held group must not re-arm the fast cadence
+      vi.setSystemTime(Date.now() + 65_000);
+      await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
+      expect(probe).toHaveBeenCalledTimes(1);
+
+      // The moment the hold expires the group counts as unprobed again: the
+      // backlog cadence re-arms and re-entry probing stays prompt (the STARS
+      // group rides the same batch)
+      vi.setSystemTime(Date.now() + 35 * 60_000);
+      await (scheduler as any).revalidateQuarantinedGroups(new AbortController().signal);
+      expect(probe).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('getSleepWindowEndMs', () => {

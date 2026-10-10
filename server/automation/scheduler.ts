@@ -185,6 +185,13 @@ function isSendLevelBan(group: GroupStateRecord): boolean {
   return group.status === 'BLOCKED' && Boolean(group.blockedAt);
 }
 
+// Whether the revalidation probe may consider this group right now: send-held
+// groups are off-limits until their 24h hold expires
+function isProbeableNow(group: GroupStateRecord, nowMs: number): boolean {
+  return !isSendLevelBan(group)
+    || (nowMs - (group.blockedAt! * 1000)) >= SEND_BAN_REVALIDATE_SECONDS * 1000;
+}
+
 function withTimeoutMs<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<T>((resolve) => {
@@ -437,7 +444,13 @@ export class AutomationScheduler {
     const now = Date.now();
 
     const quarantined = allGroups.filter((g) => g.status === 'STARS' || g.status === 'BLOCKED');
-    const unprobed = allGroups.filter((g) => !this.lastProbeAtByChat.has(g.chatId));
+    // A send-held group is not probeable until its hold expires — counting it
+    // as "awaiting first probe" keeps the 60s backlog cadence armed forever
+    // and re-probes the whole quarantined set ~15x faster than designed
+    // (postmortem 75)
+    const unprobed = allGroups.filter(
+      (g) => !this.lastProbeAtByChat.has(g.chatId) && isProbeableNow(g, now),
+    );
     if (!quarantined.length && !unprobed.length) return;
 
     const interval = unprobed.length ? REVALIDATE_CATCHUP_INTERVAL_MS : REVALIDATE_INTERVAL_MS;
@@ -452,8 +465,7 @@ export class AutomationScheduler {
       // Send-confirmed bans are trusted for a day: the probe reports some of
       // them as writable, and re-integrating on that alone burns slots on
       // guaranteed failures (postmortem 74)
-      .filter((g) => !isSendLevelBan(g)
-        || (now - (g.blockedAt! * 1000)) >= SEND_BAN_REVALIDATE_SECONDS * 1000)
+      .filter((g) => isProbeableNow(g, now))
       .sort((a, b) => (this.lastProbeAtByChat.get(a.chatId) || 0) - (this.lastProbeAtByChat.get(b.chatId) || 0))
       .slice(0, REVALIDATE_BATCH_SIZE);
 
@@ -552,7 +564,7 @@ export class AutomationScheduler {
 
     if (probedCount > 0) {
       const remainingUnprobed = allGroups.filter(
-        (g) => !this.lastProbeAtByChat.has(g.chatId),
+        (g) => !this.lastProbeAtByChat.has(g.chatId) && isProbeableNow(g, Date.now()),
       ).length;
       this.db.addLog({
         createdAt: Math.floor(Date.now() / 1000),

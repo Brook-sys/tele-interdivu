@@ -145,7 +145,7 @@ export function createOrchestratorHandler(
         sendJson(res, 200, {
           isMaster: true,
           workerId: options.workerId,
-          ...coordinator.getAggregatedStats(serverNow),
+          ...coordinator.getAggregatedStats(serverNow, options.workerId),
         });
         return true;
       }

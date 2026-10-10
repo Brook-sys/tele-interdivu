@@ -922,3 +922,39 @@ mudou (continua pedindo janela de 200 + contador das stats).
 Validação: teste de regressão em `routes.test.ts` semeia 550 itens e exige
 TXT com 550 linhas (sem duplicatas), CSV com 551 (header incluso) e a lista
 paginada em 500 — 294/294 no vitest, tsc e eslint limpos.
+
+Validação ao vivo (10/10, deploy `aebd1ab4a`): nos dois daemons, todo kind
+bateu stats = TXT = CSV-parseado (acc1: 6084/4179/2199, total 12462; acc2:
+3469/1835/814, total 6118). O CSV com quebras de linha dentro de
+`resolvedAbout` entre aspas é íntegro (parser real: 4179 registros, 0
+malformados) — contagem ingênua por `\n` superestima.
+
+## 76. 10/10/26 — Bateria completa de testes: cadência de sondagem 15× e orquestrador se contando 2×
+
+Contexto: deploy do item 75 + rearme das duas contas para análise ampla
+autorizada pelo dono.
+
+**Bug A (superfície de detecção):** grupos em holding de 24h são filtrados
+da fila de sondagem, mas continuavam contando como "aguardando 1ª sondagem"
+— o `unprobed` nunca esvaziava e o intervalo de catchup de 60s ficava armado
+para sempre. Ao vivo, a acc1 re-sondava o conjunto quarentenado a cada ~2
+minutos (10 grupos por ~100s), ~15× a cadência de 30min desenhada — padrão
+de volume que o Telegram classifica como bot em massa. Correção: o predicado
+`isProbeableNow` (hold ativo ⇒ não sondável) passa a valer para a decisão
+de cadência, a fila e o log; quando a holding vence, o grupo volta a contar
+como não-sondado e o catchup re-arma por um ciclo (reentrada continua
+pontual). Teste de regressão com relógio falso cobre os três tempos.
+
+**Bug B (contabilidade):** `getAggregatedStats` somava a contagem fresca do
+próprio master (DB) E o snapshot da autoregistro dele na lista de workers —
+o `totalTodaySent` do `/info` dava 1011 quando o real era 707 (304 contados
+duas vezes). Correção: o `/info` passa o `workerId` próprio e o agregador
+pula o self. Teste de regressão: 1 (fresco) + 5 (outro worker) = 6, nunca
++7 do self.
+
+Não-bugs confirmados: `todaySent` é janela móvel de 24h e TODAS as UIs já
+rotulam como "Últimas 24h" / "envios 24h" (o nome do campo é histórico);
+`dailyLimit` contra a janela móvel é conservador por construção; CSV com
+newline em `resolvedAbout` é válido e o parser confirma a integridade.
+
+Validação: 296/296 no vitest (2 testes novos), tsc e eslint limpos.

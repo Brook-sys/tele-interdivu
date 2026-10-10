@@ -129,4 +129,33 @@ describe('OrchestratorCoordinator', () => {
     expect(stats.aliveWorkers).toBe(1);
     expect(stats.totalTodaySent).toBe(5);
   });
+
+  it('does not double count the master own registration in the aggregate', () => {
+    // Found live on 10/10: the master self-registers as a worker, and the
+    // aggregate summed its snapshot on top of the fresh own-DB count
+    const { coordinator, db } = createStack();
+    const now = Math.floor(Date.now() / 1000);
+    coordinator.upsertWorker({
+      workerId: 'account-1', apiUrl: 'http://master', groups: [],
+      statusSnapshot: { todaySent: 7 },
+    });
+    coordinator.upsertWorker({
+      workerId: 'account-2', apiUrl: 'http://worker', groups: [],
+      statusSnapshot: { todaySent: 5 },
+    });
+    (coordinator as any).db.rawDb()
+      .prepare('UPDATE orchestrator_workers SET last_heartbeat_at = ? WHERE worker_id = ?')
+      .run(now, 'account-1');
+    (coordinator as any).db.rawDb()
+      .prepare('UPDATE orchestrator_workers SET last_heartbeat_at = ? WHERE worker_id = ?')
+      .run(now, 'account-2');
+    db.addLog({
+      createdAt: now, chatId: 'x', chatTitle: 't', messageSnippet: 'm', linkUsed: '', status: 'SUCCESS',
+    });
+
+    const stats = coordinator.getAggregatedStats(now, 'account-1');
+    // Own fresh count (1) + the other worker (5); the self snapshot (7) is
+    // never added on top
+    expect(stats.totalTodaySent).toBe(6);
+  });
 });
