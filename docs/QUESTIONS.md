@@ -958,3 +958,9 @@ rotulam como "Últimas 24h" / "envios 24h" (o nome do campo é histórico);
 newline em `resolvedAbout` é válido e o parser confirma a integridade.
 
 Validação: 296/296 no vitest (2 testes novos), tsc e eslint limpos.
+
+Validação ao vivo (10/10, deploy `42a8f5503`): a sondagem da acc1 drenou o
+backlog pós-reinício (56→…→6→0 aguardando, helds excluídos da contagem) e
+**parou de logar** — silêncio de 5+ minutos contra uma sondagem a cada ~100s
+do build anterior; o `/info` do orquestrador passou a somar 713 ≈ 307+407 dos
+dois workers (antes: 1011 com o self duplicado).
