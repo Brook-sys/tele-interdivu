@@ -28,9 +28,10 @@ export function parsePromoSettings(value: string): PromoSettings | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
 
   const {
-    folderId, categoryOrder, sortCriteriaByCategoryId,
+    folderId, folderIds, categoryOrder, sortCriteriaByCategoryId,
   } = raw as {
     folderId?: unknown;
+    folderIds?: unknown;
     categoryOrder?: unknown;
     sortCriteriaByCategoryId?: unknown;
   };
@@ -49,8 +50,18 @@ export function parsePromoSettings(value: string): PromoSettings | undefined {
   }
 
   return {
-    folderId: typeof folderId === 'number' ? folderId : undefined,
+    // Legacy exports carry a single `folderId`; current ones carry the full list
+    folderIds: parseFolderIds(folderIds, folderId),
     categoryOrder,
     sortCriteriaByCategoryId: nextSortCriteria,
   };
+}
+
+function parseFolderIds(folderIds: unknown, legacyFolderId: unknown): number[] | undefined {
+  if (Array.isArray(folderIds)) {
+    const parsed = folderIds.filter((id): id is number => typeof id === 'number');
+    return parsed.length ? parsed : undefined;
+  }
+
+  return typeof legacyFolderId === 'number' ? [legacyFolderId] : undefined;
 }

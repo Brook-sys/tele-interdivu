@@ -2,9 +2,14 @@ export type PromoCategoryId = 'free' | 'slowmode' | 'stars';
 
 export type PromoSortCriteria = 'alphabetical' | 'starsCost' | 'slowmodeRemaining';
 
+// Telegram's per-folder chat cap — the manager spills new chats into the next
+// selected folder once the earlier ones fill up
+export const PROMO_FOLDER_CHAT_LIMIT = 100;
+
 export interface PromoSettings {
-  // Folder whose members are visible in the promo panel
-  folderId?: number;
+  // Folders whose members feed the promo panel, automation targets and link
+  // extraction; the first one with room receives chats added by the manager
+  folderIds?: number[];
   // Order of the fixed sections in the panel
   categoryOrder: PromoCategoryId[];
   sortCriteriaByCategoryId: Record<PromoCategoryId, PromoSortCriteria>;

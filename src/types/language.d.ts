@@ -2311,6 +2311,8 @@ export interface LangPair {
   'PromoSettingsTitle': undefined;
   'PromoSettingsFolder': undefined;
   'PromoSettingsFolderNone': undefined;
+  'PromoSettingsFolderMultiHint': undefined;
+  'PromoFoldersFull': undefined;
   'PromoSettingsSectionOrder': undefined;
   'PromoSettingsSortBy': undefined;
   'PromoSortAlphabetical': undefined;
@@ -4809,6 +4811,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'PollModalAddMoreText': {
+    'count': V;
+  };
+  'PromoSettingsFolderTotalChats': {
     'count': V;
   };
   'PromoManageSelectedCount': {

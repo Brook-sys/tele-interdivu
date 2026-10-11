@@ -1,7 +1,7 @@
 import { memo, useMemo, useState } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
-import type { ApiChat } from '../../../api/types';
+import type { ApiChat, ApiChatFolder } from '../../../api/types';
 
 import { selectPromoSettings } from '../../../global/selectors/promo';
 import buildClassName from '../../../util/buildClassName';
@@ -23,21 +23,21 @@ type OwnProps = {
 };
 
 type StateProps = {
-  folderId?: number;
-  includedChatIds: string[];
+  folderIds: number[];
+  foldersById: Record<number, ApiChatFolder>;
   chatsById: Record<string, ApiChat>;
   activeListIds?: string[];
   archivedListIds?: string[];
 };
 
-const NO_IDS: string[] = [];
+const NO_FOLDER_IDS: number[] = [];
 const MANAGED_CHAT_TYPES: ApiChat['type'][] = ['chatTypeBasicGroup', 'chatTypeSuperGroup'];
 
 const PromoManageGroups = ({
   isActive,
   onReset,
-  folderId,
-  includedChatIds,
+  folderIds,
+  foldersById,
   chatsById,
   activeListIds,
   archivedListIds,
@@ -52,10 +52,25 @@ const PromoManageGroups = ({
     onBack: onReset,
   });
 
-  const visibleIdSet = useMemo(
-    () => new Set(includedChatIds),
-    [includedChatIds],
+  const hasSelectedFolders = folderIds.length > 0;
+  const selectedFolders = useMemo(
+    () => folderIds.map((id) => foldersById[id]).filter(Boolean),
+    [folderIds, foldersById],
   );
+  // A chat inside any selected folder counts as visible (hiding removes it
+  // from every folder that includes it)
+  const includedChatIds = useMemo(() => {
+    const seen = new Set<string>();
+    selectedFolders.forEach((folder) => {
+      folder.includedChatIds.forEach((chatId) => {
+        if (!seen.has(chatId)) {
+          seen.add(chatId);
+        }
+      });
+    });
+    return [...seen];
+  }, [selectedFolders]);
+  const visibleIdSet = useMemo(() => new Set(includedChatIds), [includedChatIds]);
 
   const filteredChatIds = useMemo(() => {
     const allIds = [...(activeListIds || []), ...(archivedListIds || [])];
@@ -159,7 +174,7 @@ const PromoManageGroups = ({
           onClick={onReset}
         />
         <h3>{lang('PromoMenuManage')}</h3>
-        {folderId !== undefined && filteredChatIds.length > 0 && (
+        {hasSelectedFolders && filteredChatIds.length > 0 && (
           <Button
             round
             size="smaller"
@@ -180,7 +195,7 @@ const PromoManageGroups = ({
         />
       </div>
       <div className={buildClassName(styles.scrollable, 'custom-scroll')}>
-        {!folderId ? (
+        {!hasSelectedFolders ? (
           <div className={styles.hint}>{lang('PromoManageNoFolder')}</div>
         ) : filteredChatIds.length ? (
           filteredChatIds.map(renderRow)
@@ -188,7 +203,7 @@ const PromoManageGroups = ({
           <div className={styles.hint}>{lang('PromoManageNoMatches')}</div>
         )}
       </div>
-      {folderId !== undefined && selectedIds.size > 0 && (
+      {hasSelectedFolders && selectedIds.size > 0 && (
         <div className={styles.actionBar}>
           <span className={styles.selectedCount}>
             {lang('PromoManageSelectedCount', { count: selectedIds.size }, { pluralValue: selectedIds.size })}
@@ -222,12 +237,11 @@ const PromoManageGroups = ({
 
 export default memo(withGlobal<OwnProps>(
   (global): Complete<StateProps> => {
-    const { folderId } = selectPromoSettings(global);
-    const folder = folderId !== undefined ? global.chatFolders.byId[folderId] : undefined;
+    const { folderIds } = selectPromoSettings(global);
 
     return {
-      folderId,
-      includedChatIds: folder?.includedChatIds ?? NO_IDS,
+      folderIds: folderIds ?? NO_FOLDER_IDS,
+      foldersById: global.chatFolders.byId,
       chatsById: global.chats.byId,
       activeListIds: global.chats.listIds.active,
       archivedListIds: global.chats.listIds.archived,

@@ -5,14 +5,13 @@ import type { ApiChat, ApiChatFullInfo } from '../../../api/types';
 import type { PromoCategoryId, PromoChatStatus, PromoSettings } from '../../../global/types/promo';
 import { LeftColumnContent } from '../../../types';
 
-import { ALL_FOLDER_ID } from '../../../config';
 import { selectPromoSettings, selectPromoUserState } from '../../../global/selectors/promo';
 import buildClassName from '../../../util/buildClassName';
 import { buildPromoSections } from '../../../util/promo/buildSections';
 import { getSlowmodeRemainingSeconds } from '../../../util/promo/classifyChat';
 
 import useFlag from '../../../hooks/useFlag';
-import { useFolderManagerForOrderedIds } from '../../../hooks/useFolderManager';
+import { useFolderManagerForUnionOrderedIds } from '../../../hooks/useFolderManager';
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -27,6 +26,7 @@ import PromoPanelSettings from './PromoPanelSettings';
 import styles from './PromoPanel.module.scss';
 
 const STATUS_REFRESH_INTERVAL_MS = 60_000;
+const NO_FOLDER_IDS: number[] = [];
 
 type OwnProps = {
   isActive: boolean;
@@ -66,19 +66,19 @@ const PromoPanel = ({
   const [isSettingsOpen, openSettings, closeSettings] = useFlag();
   const serverNow = usePromoServerNow(isActive && !isSettingsOpen);
 
-  const folderId = settings.folderId;
-  const isSetupMode = !folderId;
+  const folderIds = settings.folderIds ?? NO_FOLDER_IDS;
+  const isSetupMode = !folderIds.length;
 
   useHistoryBack({
     isActive: isActive && !isSettingsOpen && !isSetupMode,
     onBack: onReset,
   });
 
-  const orderedIds = useFolderManagerForOrderedIds(folderId ?? ALL_FOLDER_ID);
+  const orderedIds = useFolderManagerForUnionOrderedIds(folderIds);
   const orderedIdsRef = useStateRef(orderedIds);
 
   const sections = useMemo(() => {
-    if (!folderId || !orderedIds) return undefined;
+    if (!folderIds.length || !orderedIds) return undefined;
 
     return buildPromoSections({
       orderedChatIds: orderedIds,
@@ -91,12 +91,12 @@ const PromoPanel = ({
       locale: lang.code,
     });
   }, [
-    folderId, orderedIds, chatsById, fullInfoById, statusById,
+    folderIds, orderedIds, chatsById, fullInfoById, statusById,
     settings.categoryOrder, settings.sortCriteriaByCategoryId, serverNow, lang.code,
   ]);
 
   useEffect(() => {
-    if (!isActive || !folderId) return undefined;
+    if (!isActive || !folderIds.length) return undefined;
 
     const requestStatuses = () => {
       const chatIds = orderedIdsRef.current;
@@ -111,7 +111,7 @@ const PromoPanel = ({
     return () => {
       window.clearInterval(interval);
     };
-  }, [isActive, folderId, orderedIdsRef, requestPromoStatuses]);
+  }, [isActive, folderIds, orderedIdsRef, requestPromoStatuses]);
 
   const handleOpenSettings = useLastCallback(() => {
     openSettings();

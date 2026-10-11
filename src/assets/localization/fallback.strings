@@ -3146,11 +3146,15 @@
 "PromoCategoryStars" = "Cobra Estrelas";
 "PromoEmptySection" = "Nenhum grupo nesta seção";
 "PromoSetupTitle" = "Configure o painel";
-"PromoSetupFolderHint" = "Selecione qual pasta do Telegram define os grupos visíveis do painel";
+"PromoSetupFolderHint" = "Selecione as pastas do Telegram que definem os grupos visíveis do painel";
 "PromoSetupOpenSettings" = "Escolher pasta";
 "PromoSettingsTitle" = "Configurações do painel";
-"PromoSettingsFolder" = "Pasta de visibilidade";
+"PromoSettingsFolder" = "Pastas de visibilidade";
 "PromoSettingsFolderNone" = "Nenhuma";
+"PromoSettingsFolderMultiHint" = "Selecione uma ou mais pastas — os grupos de todas elas se somam ao painel, à automação e à extração (limite do Telegram: 100 chats por pasta)";
+"PromoSettingsFolderTotalChats_one" = "{count} grupo no total";
+"PromoSettingsFolderTotalChats_other" = "{count} grupos no total";
+"PromoFoldersFull" = "Todas as pastas selecionadas estão cheias (100 chats cada) — adicione outra pasta nas configurações";
 "PromoSettingsSectionOrder" = "Ordem das seções";
 "PromoSettingsSortBy" = "Ordenação interna";
 "PromoSortAlphabetical" = "Alfabética";
@@ -3167,7 +3171,7 @@
 "PromoManageSelectedCount_one" = "{count} selecionado";
 "PromoManageSelectedCount_other" = "{count} selecionados";
 "PromoManageNoMatches" = "Nenhum grupo encontrado";
-"PromoManageNoFolder" = "Escolha a pasta de visibilidade nas configurações do painel";
+"PromoManageNoFolder" = "Escolha as pastas de visibilidade nas configurações do painel";
 "PromoManageDone" = "Concluído";
 "PromoAutomationTitle" = "Automação";
 "PromoAutomationStart" = "Iniciar Automação";

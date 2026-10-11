@@ -2,7 +2,10 @@ import { memo, useMemo, useRef } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { ApiChatFolder } from '../../../api/types';
-import type { PromoCategoryId, PromoSettings, PromoSortCriteria } from '../../../global/types/promo';
+import type {
+  PromoCategoryId, PromoSettings, PromoSortCriteria,
+} from '../../../global/types/promo';
+import { PROMO_FOLDER_CHAT_LIMIT } from '../../../global/types/promo';
 
 import { selectPromoSettings } from '../../../global/selectors/promo';
 import buildClassName from '../../../util/buildClassName';
@@ -61,6 +64,7 @@ const CATEGORY_ICON_BY_ID: Record<PromoCategoryId, 'check' | 'clock' | 'star'> =
 };
 
 const SETTINGS_FILE_NAME = 'telegram-promo-settings.json';
+const NO_FOLDER_IDS: number[] = [];
 
 const PromoPanelSettings = ({
   isActive,
@@ -84,11 +88,30 @@ const PromoPanelSettings = ({
     [foldersById, orderedFolderIds],
   );
 
-  const selectedFolder = settings.folderId !== undefined ? foldersById[settings.folderId] : undefined;
+  const selectedFolderIds = settings.folderIds ?? NO_FOLDER_IDS;
+  const selectedFolders = useMemo(
+    () => folders.filter((folder) => selectedFolderIds.includes(folder.id)),
+    [folders, selectedFolderIds],
+  );
+  // Honest pool size: a chat inside two selected folders counts once
+  const totalChatCount = useMemo(
+    () => new Set(selectedFolders.flatMap((folder) => folder.includedChatIds)).size,
+    [selectedFolders],
+  );
 
-  const handleSelectFolder = useLastCallback((folderId: number | undefined) => {
+  const handleToggleFolder = useLastCallback((folderId: number) => {
     clearImportError();
-    setPromoSettings({ patch: { folderId } });
+    const isSelected = selectedFolderIds.includes(folderId);
+    const nextFolderIds = isSelected
+      ? selectedFolderIds.filter((id) => id !== folderId)
+      : [...selectedFolderIds, folderId];
+
+    setPromoSettings({ patch: { folderIds: nextFolderIds.length ? nextFolderIds : undefined } });
+  });
+
+  const handleClearFolders = useLastCallback(() => {
+    clearImportError();
+    setPromoSettings({ patch: { folderIds: undefined } });
   });
 
   const handleMoveCategory = useLastCallback((categoryId: PromoCategoryId, offset: -1 | 1) => {
@@ -148,6 +171,29 @@ const PromoPanelSettings = ({
   const handleImportClick = useLastCallback(() => {
     importInputRef.current?.click();
   });
+
+  const renderFolderRow = (folder: ApiChatFolder) => {
+    const isSelected = selectedFolderIds.includes(folder.id);
+    const isFull = folder.includedChatIds.length >= PROMO_FOLDER_CHAT_LIMIT;
+
+    return (
+      <div
+        key={folder.id}
+        role="button"
+        tabIndex={0}
+        onClick={() => handleToggleFolder(folder.id)}
+        className={buildClassName(styles.folderRow, isSelected && styles.folderRowSelected)}
+      >
+        <div className={buildClassName(styles.folderCheck, isSelected && styles.folderCheckActive)}>
+          {isSelected && <Icon name="check" className={styles.folderCheckIcon} />}
+        </div>
+        <span className={styles.folderTitle}>{folder.title.text}</span>
+        <span className={buildClassName(styles.folderChatCount, isFull && styles.folderChatCountFull)}>
+          {folder.includedChatIds.length}
+        </span>
+      </div>
+    );
+  };
 
   const renderCategoryRow = (categoryId: PromoCategoryId, index: number) => {
     const criteria = settings.sortCriteriaByCategoryId[categoryId];
@@ -214,28 +260,38 @@ const PromoPanelSettings = ({
         <div className={styles.section}>
           <span className={styles.sectionLabel}>{lang('PromoSettingsFolder')}</span>
           {folders.length ? (
-            <DropdownMenu className={styles.folderDropdown} positionX="right">
-              <MenuItem
-                icon={settings.folderId === undefined ? 'check' : undefined}
-                onClick={() => handleSelectFolder(undefined)}
+            <div className={styles.folderList}>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={handleClearFolders}
+                className={buildClassName(
+                  styles.folderRow,
+                  !selectedFolderIds.length && styles.folderRowSelected,
+                )}
               >
-                {lang('PromoSettingsFolderNone')}
-              </MenuItem>
-              {folders.map((folder) => (
-                <MenuItem
-                  key={folder.id}
-                  icon={settings.folderId === folder.id ? 'check' : undefined}
-                  onClick={() => handleSelectFolder(folder.id)}
+                <div
+                  className={buildClassName(
+                    styles.folderCheck,
+                    !selectedFolderIds.length && styles.folderCheckActive,
+                  )}
                 >
-                  {folder.title.text}
-                </MenuItem>
-              ))}
-            </DropdownMenu>
+                  {!selectedFolderIds.length && <Icon name="check" className={styles.folderCheckIcon} />}
+                </div>
+                <span className={styles.folderTitle}>{lang('PromoSettingsFolderNone')}</span>
+              </div>
+              {folders.map(renderFolderRow)}
+            </div>
           ) : (
             <div className={styles.folderHint}>{lang('PromoSetupFolderHint')}</div>
           )}
-          {selectedFolder && (
-            <div className={styles.selectedFolderName}>{selectedFolder.title.text}</div>
+          {totalChatCount > 0 && (
+            <div className={styles.selectedFolderName}>
+              {lang('PromoSettingsFolderTotalChats', { count: totalChatCount }, { pluralValue: totalChatCount })}
+            </div>
+          )}
+          {folders.length > 0 && (
+            <div className={styles.folderHint}>{lang('PromoSettingsFolderMultiHint')}</div>
           )}
         </div>
         <div className={styles.section}>

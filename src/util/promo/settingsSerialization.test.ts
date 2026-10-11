@@ -8,12 +8,24 @@ import { parsePromoSettings, serializePromoSettings } from './settingsSerializat
 describe('settingsSerialization', () => {
   it('round-trips valid settings', () => {
     const settings: PromoSettings = {
-      folderId: 3,
+      folderIds: [3, 7],
       ...DEFAULT_PROMO_SETTINGS,
       categoryOrder: ['stars', 'free', 'slowmode'],
     };
 
     expect(parsePromoSettings(serializePromoSettings(settings))).toEqual(settings);
+  });
+
+  it('imports a legacy single-folder export as a one-element list', () => {
+    const result = parsePromoSettings(JSON.stringify({
+      promoSettings: {
+        folderId: 3,
+        categoryOrder: ['free', 'slowmode', 'stars'],
+      },
+    }));
+
+    expect(result).toBeDefined();
+    expect(result!.folderIds).toEqual([3]);
   });
 
   it('rejects invalid JSON', () => {
@@ -49,6 +61,18 @@ describe('settingsSerialization', () => {
     const result = parsePromoSettings(payload);
 
     expect(result).toBeDefined();
-    expect(result!.folderId).toBeUndefined();
+    expect(result!.folderIds).toBeUndefined();
+  });
+
+  it('drops folder ids that are not numbers', () => {
+    const result = parsePromoSettings(JSON.stringify({
+      promoSettings: {
+        folderIds: [3, 'abc', 7],
+        categoryOrder: ['free', 'slowmode', 'stars'],
+      },
+    }));
+
+    expect(result).toBeDefined();
+    expect(result!.folderIds).toEqual([3, 7]);
   });
 });

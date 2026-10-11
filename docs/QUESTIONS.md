@@ -964,3 +964,36 @@ backlog pós-reinício (56→…→6→0 aguardando, helds excluídos da contage
 **parou de logar** — silêncio de 5+ minutos contra uma sondagem a cada ~100s
 do build anterior; o `/info` do orquestrador passou a somar 713 ≈ 307+407 dos
 dois workers (antes: 1011 com o self duplicado).
+
+## 77. 11/10/26 — Multi-pasta: o limite de 100 chats do Telegram deixa de bloquear o pool
+
+Contexto: pastas do Telegram têm teto de 100 chats cada, e o painel promocional
+usava exatamente UMA pasta (`PromoSettings.folderId`) — o pool de grupos para
+divulgação, automação e extração ficava refém desse teto.
+
+Mudança: `folderId` (number) → `folderIds` (number[]) em tudo. O servidor já era
+agnóstico (recebe a lista `targetChats` resolvida), então a expansão é inteira
+no cliente: o seletor nas configurações vira multi-seleção com contagem de
+chats por pasta (vermelho quando cheia) e o total honesto (união, sem contar
+duas vezes um chat que está em duas pastas); o painel lista a união das pastas
+(`useFolderManagerForUnionOrderedIds`, mesmo contrato de carregamento do hook
+single-folder); automação/extração enviam a união deduplicada; o gerenciador
+mostra "visível" = está em qualquer pasta selecionada. "Mostrar" escoa para a
+primeira pasta selecionada com vaga (`PROMO_FOLDER_CHAT_LIMIT`); quando todas
+enchem, uma notificação (`PromoFoldersFull`) orienta em vez de falhar mudo.
+"Ocultar" remove de todas as pastas selecionadas que contêm o chat. Edição de
+pasta continua paced (500ms por `editChatFolder`) — sem mudança na superfície
+de API.
+
+Compatibilidade: migração de cache (versão 7) converte `folderId` legado em
+`[folderId]`; importação de settings aceita os dois formatos (`folderId` antigo
+vira lista de um); export grava a lista.
+
+Ressalva: mais grupos disponíveis NÃO é mais seguro — os critérios anti-ban
+(`minOtherMessages`, pacing, sleep windows, dailyLimit) seguem idênticos, mas o
+universo de envio cresce: a conta passa a conversar com mais grupos distintos
+por dia, o que por si só aumenta a superfície junto ao Telegram. O tamanho do
+pool é escolha do operador.
+
+Validação: 298/298 no vitest (round-trip multi-pasta + import legado + filtro
+de ids inválidos), tsc e eslint limpos, `lang:ts` regenerado.

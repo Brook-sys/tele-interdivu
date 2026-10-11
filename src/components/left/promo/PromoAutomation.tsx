@@ -191,8 +191,23 @@ const PromoAutomation = ({
     return () => window.clearInterval(int);
   }, [isActive]);
 
-  const folder = settings.folderId !== undefined ? foldersById[settings.folderId] : undefined;
-  const targetChatIds = useMemo(() => folder?.includedChatIds || [], [folder]);
+  const selectedFolders = useMemo(
+    () => (settings.folderIds || []).map((id) => foldersById[id]).filter(Boolean),
+    [settings.folderIds, foldersById],
+  );
+  // The union feeds the server with the whole multi-folder pool (a chat inside
+  // two selected folders is sent once)
+  const targetChatIds = useMemo(() => {
+    const seen = new Set<string>();
+    selectedFolders.forEach((folder) => {
+      folder.includedChatIds.forEach((chatId) => {
+        if (!seen.has(chatId)) {
+          seen.add(chatId);
+        }
+      });
+    });
+    return [...seen];
+  }, [selectedFolders]);
 
   const destinations = campaign?.destinations ?? [];
   const allLinks = campaign?.allLinks ?? [];
@@ -891,7 +906,7 @@ const PromoAutomation = ({
             <Button
               color="primary"
               size="smaller"
-              disabled={isSubmitting || !folder}
+              disabled={isSubmitting || !selectedFolders.length}
               onClick={handleStart}
             >
               {lang('PromoAutomationStart')}

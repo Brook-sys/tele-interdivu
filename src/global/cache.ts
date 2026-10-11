@@ -519,6 +519,20 @@ function unsafeMigrateCache(cached: GlobalState, initialState: GlobalState) {
     cached.cacheVersion = 6;
   }
 
+  if (cached.cacheVersion < 7) {
+    // Folder selection became multi-folder: `folderId` (number) → `folderIds` ([number])
+    const promoByUserId = (untypedCached.promo?.byUserId || {}) as Record<string, {
+      settings?: { folderId?: number; folderIds?: number[] };
+    }>;
+    Object.values(promoByUserId).forEach((userState) => {
+      const settings = userState.settings;
+      if (typeof settings?.folderId !== 'number') return;
+      settings.folderIds = [settings.folderId];
+      delete settings.folderId;
+    });
+    cached.cacheVersion = 7;
+  }
+
   if (!cached.auth) {
     cached.auth = initialState.auth;
     cached.auth.rememberMe = untypedCached.rememberMe;

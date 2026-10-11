@@ -1,6 +1,8 @@
 import type { RequiredGlobalActions } from '../../index';
-import type { ActionReturnType } from '../../types';
+import type { ActionReturnType, GlobalState } from '../../types';
+import { PROMO_FOLDER_CHAT_LIMIT } from '../../types/promo';
 
+import { getCurrentTabId } from '../../../util/establishMultitabRole';
 import { pause } from '../../../util/schedulers';
 import { getServerTime } from '../../../util/serverTime';
 import { callApi } from '../../../api/gramjs';
@@ -70,30 +72,67 @@ async function runPromoStatusQueue(actions: RequiredGlobalActions) {
 
 addActionHandler('setPromoChatsVisibility', async (global, actions, payload): Promise<void> => {
   const { chatIds, isVisible } = payload;
-  const folderId = selectPromoSettings(global).folderId;
-  if (folderId === undefined) return;
+  const folderIds = selectPromoSettings(global).folderIds ?? [];
+  if (!folderIds.length) return;
 
   for (const chatId of chatIds) {
     const currentGlobal = getGlobal();
-    const folder = selectChatFolder(currentGlobal, folderId);
-    if (!folder) return;
 
-    const isIncluded = folder.includedChatIds.includes(chatId);
-    if (isIncluded === isVisible) continue;
+    if (isVisible) {
+      const targetFolderId = pickFolderIdWithRoom(currentGlobal, folderIds);
+      if (targetFolderId === undefined) {
+        actions.showNotification({
+          message: { key: 'PromoFoldersFull' },
+          tabId: getCurrentTabId(),
+        });
+        return;
+      }
+      await applyFolderInclusion(targetFolderId, chatId, true);
+      continue;
+    }
 
-    const folderUpdate = {
-      ...folder,
-      includedChatIds: isVisible
-        ? [...folder.includedChatIds, chatId]
-        : folder.includedChatIds.filter((id) => id !== chatId),
-      pinnedChatIds: isVisible ? folder.pinnedChatIds : folder.pinnedChatIds?.filter((id) => id !== chatId),
-    };
-
-    await callApi('editChatFolder', {
-      id: folderId,
-      folderUpdate,
-    });
-
-    await pause(PROMO_BULK_INTERVAL_MS);
+    const foldersIncludingChat = folderIds.filter((folderId) => (
+      selectChatFolder(currentGlobal, folderId)?.includedChatIds.includes(chatId)
+    ));
+    for (const folderId of foldersIncludingChat) {
+      await applyFolderInclusion(folderId, chatId, false);
+    }
   }
 });
+
+async function applyFolderInclusion(folderId: number, chatId: string, isVisible: boolean) {
+  const global = getGlobal();
+  const folder = selectChatFolder(global, folderId);
+  if (!folder) return;
+
+  const isIncluded = folder.includedChatIds.includes(chatId);
+  if (isIncluded === isVisible) return;
+
+  const folderUpdate = {
+    ...folder,
+    includedChatIds: isVisible
+      ? [...folder.includedChatIds, chatId]
+      : folder.includedChatIds.filter((id) => id !== chatId),
+    pinnedChatIds: isVisible ? folder.pinnedChatIds : folder.pinnedChatIds?.filter((id) => id !== chatId),
+  };
+
+  await callApi('editChatFolder', {
+    id: folderId,
+    folderUpdate,
+  });
+
+  await pause(PROMO_BULK_INTERVAL_MS);
+}
+
+// Telegram caps each folder at `PROMO_FOLDER_CHAT_LIMIT` chats; new chats flow
+// into the first selected folder that still has room
+function pickFolderIdWithRoom(global: GlobalState, folderIds: number[]): number | undefined {
+  for (const folderId of folderIds) {
+    const folder = selectChatFolder(global, folderId);
+    if (folder && folder.includedChatIds.length < PROMO_FOLDER_CHAT_LIMIT) {
+      return folderId;
+    }
+  }
+
+  return undefined;
+}
