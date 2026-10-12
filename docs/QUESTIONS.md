@@ -997,3 +997,52 @@ pool é escolha do operador.
 
 Validação: 298/298 no vitest (round-trip multi-pasta + import legado + filtro
 de ids inválidos), tsc e eslint limpos, `lang:ts` regenerado.
+
+## 78. 12/10/26 — USER_BANNED_IN_CHANNEL: restrição detectada antes do envio, não depois
+
+Contexto: diversos envios caíam em `RPCError 400: USER_BANNED_IN_CHANNEL`
+(09/10: 14 erros em 10min após reintegrações às 16:48; 12/10: 9 erros em 9
+grupos na acc1 e 5 em 5 na acc2 — 100% dos erros do dia eram esse tipo). A
+restrição é por usuário e por grupo — o banner "admin restringiu o seu envio
+até 12 dez" vem de `ChatBannedRights.until_date` — e a primeira "checagem" de
+permissão de um grupo READY era o próprio `SendMessage`: cada erro era uma
+escrita rejeitada, exatamente o padrão que pontua como bot. A documentação
+oficial (constructor `channel` flags.15, `errors.json`, TDLib) confirma as
+fontes pré-envio: `channel.banned_rights`, `channels.getParticipant(self)` e o
+push `updateChannelParticipant` — além do `messages.setTyping`, que o servidor
+responde com a mesma família de erro.
+
+Mudança (em camadas; nenhuma altera critérios):
+- L0 — pushes em tempo real: `updateChannelParticipant` da própria conta vira
+  carimbo imediato de BLOCKED com `bannedUntil` (a onda de 14 erros teria sido
+  ~0–1: os grupos seriam quarentenados segundos após o bot agir). Push de
+  desrestrição reabre o portão temporal; o piso de 24h de ban confirmado por
+  envio continua valendo (antiflip-flop, item 74).
+- L1 — predicado honesto: `canWrite` passa a considerar `send_plain`,
+  `embed_links` e `view_messages` (ban granular de texto/link — as mensagens
+  são texto com links) e o `left` do participante. O campo `kicked` não
+  existe nessa layer do TL e a detecção antiga nunca disparava — provável
+  causa raiz do "probe mente" do item 74.
+- L2 — sensor de typing: `SetTyping` deixa de engolir erros; a família
+  permanente aborta o envio sem gastar a tentativa (documentado em
+  `errors.json` para `messages.setTyping`).
+- L3 — holdings conscientes: novo campo `banned_until` guarda o fim real da
+  restrição (normalizado; "para sempre" vira reconsideração de 30 dias). O
+  piso de 24h mantém; `until_date` só estende.
+- L4 — pre-flight orçado: veredito de escrita com mais de 6h dispara
+  `probeChat` antes do envio (máx. 30/hora; fora do orçamento envia como
+  antes). Sucesso de envio e sondagens carimbam `last_verified_at`.
+- L6 — higiene: `chat_type` persistido no probe; canal broadcast (exceto
+  gigagroup) é excluído da fila — membro nunca posta em canal.
+
+Descartado: sweep em lote via `channels.getChannels` (L5) — flags de canal não
+credenciam "pode escrever" (contexto `min`) e o pre-flight já cobre a mesma
+lacuna com leitura autoritativa; seria mais chamadas sem ganho.
+
+Ressalva: nenhuma camada envia mais mensagens — L0/L1/L2/L3/L6 não somam
+nenhuma chamada nova e L4 soma apenas leituras orçadas. A superfície de
+detecção DIMINUI (menos escritas rejeitadas). O primeiro envio que DISPARA um
+ban retaliatório continua inevitável — a defesa segue sendo a qualidade dos
+critérios (`minOtherMessages`, pacing), intactos.
+
+Validação: 299/299 no vitest, tsc e eslint limpos.

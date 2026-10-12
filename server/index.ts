@@ -48,6 +48,10 @@ const scheduler = new AutomationScheduler(
   workerClient,
 );
 
+// Realtime restriction pushes (`updateChannelParticipant`) become ban stamps
+// without any extra API call
+runner.setSelfRestrictionHandler((event) => scheduler.applySelfRestriction(event));
+
 // Executes commands issued from the orchestration panel through the heartbeat
 // channel. Every branch is idempotent, so re-delivery after a lost ack is
 // harmless. Commands only arrive once the heartbeat loop starts, long after

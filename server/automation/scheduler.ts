@@ -1,6 +1,6 @@
 import type { AutomationDatabase, AutomationDbConfig, GroupStateRecord } from '../db/database';
 import type { OrchestratorSendResult, OrchestratorWorkerClient } from '../orchestrator/workerClient';
-import type { ChatProbeResult } from './telegramRunner';
+import type { ChatProbeResult, SelfRestrictionEvent } from './telegramRunner';
 
 import { compileSpunMessage, pickPromotionPool, pickTemplate } from './spintax';
 
@@ -95,6 +95,12 @@ export function evaluateGroupEligibility(
     return { isEligible: false, reason: 'BLOCKED' };
   }
 
+  // Broadcast channels never accept member posts — the probe sweep
+  // quarantines them, and this keeps them out of the queue until it does
+  if (group.chatType === 'channel') {
+    return { isEligible: false, reason: 'BLOCKED' };
+  }
+
   if (group.status === 'STARS' || (group.starsCost || 0) > 0) {
     return { isEligible: false, reason: 'STARS' };
   }
@@ -156,6 +162,11 @@ type SendCallback = (chatId: string, text: string, linkUsed: string) => Promise<
 type CheckMessagesCallback = (chatId: string, minRequired: number) => Promise<number>;
 type ProbeChatCallback = (chatId: string) => Promise<ChatProbeResult | undefined>;
 
+// Pre-flight outcome: 'fresh' and 'verified' clear the send, 'blocked' and
+// 'stars' quarantine it, 'skip' backs off for a minute on a transient
+// probe failure, 'blind' proceeds without a fresh verdict (budget spent)
+type PreFlightResult = 'fresh' | 'verified' | 'blocked' | 'stars' | 'skip' | 'blind';
+
 const REVALIDATE_INTERVAL_MS = 30 * 60_000;
 const REVALIDATE_BATCH_SIZE = 10;
 // While some quarantined group has not been probed in this process yet,
@@ -170,6 +181,46 @@ const ORCHESTRATOR_DENY_CAP_SECONDS = 120;
 // guaranteed failures in a loop. A ban confirmed by a real send is trusted for
 // this long before the probe may reconsider it
 const SEND_BAN_REVALIDATE_SECONDS = 24 * 3600;
+// Telegram signals "restricted forever" with `until_date` = 0x7fffffff (and
+// legacy 0); trusting it literally would suppress probing forever, so
+// forever stamps are reconsidered after this long — a late admin unban is
+// still noticed without wasting probes on permanent bans
+const FOREVER_BAN_RECONSIDER_SECONDS = 30 * 24 * 3600;
+// Any `until_date` at or above this is Telegram's "forever"
+const FOREVER_BAN_UNTIL = 0x7fff_f000;
+// A realtime push repeating a ban that was stamped moments ago only
+// refreshes the stamp silently, so ban flapping cannot flood the log
+const PUSH_RESTAMP_LOG_SECONDS = 300;
+// A write verdict older than this makes the send loop verify the group with
+// a read-only probe before writing; realtime pushes and probe sweeps keep
+// most verdicts fresh, so pre-flights fire rarely
+const PRE_FLIGHT_TTL_SECONDS = 6 * 3600;
+// Upper bound on pre-flight probes per rolling hour: beyond the budget the
+// send proceeds without a fresh verdict, so a stale pool cannot double the
+// request volume
+const PRE_FLIGHT_MAX_PER_HOUR = 30;
+const PT_MONTHS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
+// Scheduling value for the probe gate: the raw Telegram `until_date`, with
+// forever stamps capped to a reconsider horizon
+function normalizeBannedUntil(rawBannedUntil: number | undefined, nowSec: number): number | undefined {
+  if (rawBannedUntil === undefined) return undefined;
+  if (rawBannedUntil <= 0 || rawBannedUntil >= FOREVER_BAN_UNTIL) {
+    return nowSec + FOREVER_BAN_RECONSIDER_SECONDS;
+  }
+  return rawBannedUntil;
+}
+
+// Deterministic "12 dez 15:00 UTC" stamp — Node builds may lack full ICU,
+// so Intl is avoided
+function formatUnixStamp(sec: number): string {
+  const d = new Date(sec * 1000);
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${day} ${PT_MONTHS[d.getUTCMonth()]} ${hh}:${mm} UTC`;
+}
+
 // Send-level errors that mean "this account may never post there" — the group
 // is quarantined and only a probe after SEND_BAN_REVALIDATE_SECONDS reconsiders
 const PERMANENT_WRITE_ERROR_REGEX = /CHAT_WRITE_FORBIDDEN|USER_BANNED_IN_CHANNEL|CHANNEL_PRIVATE|CHAT_RESTRICTED/;
@@ -186,10 +237,14 @@ function isSendLevelBan(group: GroupStateRecord): boolean {
 }
 
 // Whether the revalidation probe may consider this group right now: send-held
-// groups are off-limits until their 24h hold expires
+// groups are off-limits until their 24h hold expires, and a restriction with
+// a known end date is not re-probed before that date
 function isProbeableNow(group: GroupStateRecord, nowMs: number): boolean {
-  return !isSendLevelBan(group)
-    || (nowMs - (group.blockedAt! * 1000)) >= SEND_BAN_REVALIDATE_SECONDS * 1000;
+  if (isSendLevelBan(group)
+    && (nowMs - (group.blockedAt! * 1000)) < SEND_BAN_REVALIDATE_SECONDS * 1000) {
+    return false;
+  }
+  return nowMs >= (group.bannedUntil || 0) * 1000;
 }
 
 function withTimeoutMs<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
@@ -235,6 +290,11 @@ export class AutomationScheduler {
   private orchestratorSlotDenyUntil = new Map<string, number>();
 
   private lastProbeAtByChat = new Map<string, number>();
+
+  // Pre-flight probe budget: bounded extra read calls per rolling hour
+  private preFlightWindowStartedAt = 0;
+
+  private preFlightCount = 0;
 
   private waitStartMs?: number;
 
@@ -480,86 +540,8 @@ export class AutomationScheduler {
       if (!probe) continue;
       probedCount++;
 
-      const serverNow = Math.floor(Date.now() / 1000);
-
-      if (!probe.canWrite) {
-        if (g.status !== 'BLOCKED') {
-          this.db.upsertGroupState({
-            chatId: g.chatId,
-            title: g.title,
-            otherMessagesCount: g.otherMessagesCount,
-            slowmodeSeconds: g.slowmodeSeconds,
-            slowmodeNextSendDate: g.slowmodeNextSendDate,
-            starsCost: g.starsCost,
-            lastSentAt: g.lastSentAt,
-            status: 'BLOCKED',
-            lastError: 'Canal inacessível na revalidação',
-          });
-          if (g.status !== 'STARS') {
-            this.db.addLog({
-              createdAt: serverNow,
-              chatId: g.chatId,
-              chatTitle: g.title,
-              messageSnippet: `Grupo "${g.title}" não aceita mensagens da conta `
-                + '(saída/banimento/trancado) — quarentenado.',
-              linkUsed: '',
-              status: 'SKIPPED',
-            });
-          }
-        }
-        continue;
-      }
-
-      const starsCost = probe.starsCost || 0;
-      if (starsCost > 0) {
-        if (g.status !== 'STARS' && g.status !== 'BLOCKED') {
-          this.db.addLog({
-            createdAt: serverNow,
-            chatId: g.chatId,
-            chatTitle: g.title,
-            messageSnippet: `Grupo "${g.title}" passou a cobrar ${starsCost} estrelas — quarentenado.`,
-            linkUsed: '',
-            status: 'SKIPPED',
-          });
-        }
-        if (g.status !== 'STARS' || g.starsCost !== starsCost) {
-          this.db.upsertGroupState({
-            chatId: g.chatId,
-            title: g.title,
-            otherMessagesCount: g.otherMessagesCount,
-            slowmodeSeconds: g.slowmodeSeconds,
-            slowmodeNextSendDate: g.slowmodeNextSendDate,
-            starsCost,
-            lastSentAt: g.lastSentAt,
-            status: 'STARS',
-            lastError: undefined,
-          });
-        }
-        continue;
-      }
-
-      // Free again: reintegrate into the queue
-      this.db.upsertGroupState({
-        chatId: g.chatId,
-        title: g.title,
-        otherMessagesCount: g.otherMessagesCount,
-        slowmodeSeconds: probe.slowmodeSeconds !== undefined ? probe.slowmodeSeconds : g.slowmodeSeconds,
-        slowmodeNextSendDate: g.slowmodeNextSendDate,
-        starsCost: 0,
-        lastSentAt: g.lastSentAt,
-        status: 'READY',
-        lastError: undefined,
-        blockedAt: 0,
-      });
-      this.db.addLog({
-        createdAt: serverNow,
-        chatId: g.chatId,
-        chatTitle: g.title,
-        messageSnippet: `Grupo "${g.title}" deixou de cobrar estrelas/bloquear e foi reintegrado à fila.`,
-        linkUsed: '',
-        status: 'SKIPPED',
-      });
-      reintegratedCount++;
+      const verdict = this.applyProbeVerdict(g, probe, Math.floor(Date.now() / 1000));
+      if (verdict === 'ready') reintegratedCount++;
     }
 
     if (probedCount > 0) {
@@ -573,6 +555,261 @@ export class AutomationScheduler {
         messageSnippet: `Sondagem de grupos: ${probedCount} verificado(s), `
           + `${reintegratedCount} reintegrado(s)`
           + (remainingUnprobed ? `, ${remainingUnprobed} aguardando 1ª sondagem.` : '.'),
+        linkUsed: '',
+        status: 'SKIPPED',
+      });
+    }
+  }
+
+  // Applies a probe verdict to the group state — broadcast-channel
+  // exclusion, quarantine, stars pricing or reintegration — with the
+  // matching log entries. Both the revalidation loop and the pre-send
+  // pre-flight stamp through here, so a restriction lands identically no
+  // matter which read found it
+  private applyProbeVerdict(
+    g: GroupStateRecord,
+    probe: ChatProbeResult,
+    serverNow: number,
+  ): 'blocked' | 'stars' | 'ready' {
+    // Broadcast channels accept posts from admins only, so a member account
+    // can never deliver there. The stamp reconsiders after the forever
+    // horizon in case the channel is ever converted into a supergroup
+    if (probe.chatType === 'channel') {
+      if (g.status !== 'BLOCKED') {
+        this.db.upsertGroupState({
+          chatId: g.chatId,
+          title: g.title,
+          otherMessagesCount: g.otherMessagesCount,
+          slowmodeSeconds: g.slowmodeSeconds,
+          slowmodeNextSendDate: g.slowmodeNextSendDate,
+          starsCost: g.starsCost,
+          lastSentAt: g.lastSentAt,
+          status: 'BLOCKED',
+          lastError: 'Canal broadcast (somente admins postam)',
+          blockedAt: serverNow,
+          bannedUntil: serverNow + FOREVER_BAN_RECONSIDER_SECONDS,
+          lastVerifiedAt: serverNow,
+        });
+        this.db.addLog({
+          createdAt: serverNow,
+          chatId: g.chatId,
+          chatTitle: g.title,
+          messageSnippet: `Grupo "${g.title}" é um canal broadcast (somente admins postam) — excluído da automação.`,
+          linkUsed: '',
+          status: 'SKIPPED',
+        });
+      }
+      return 'blocked';
+    }
+
+    if (!probe.canWrite) {
+      const rawBannedUntil = probe.bannedUntil;
+      // A fresh no-duration verdict (kicked, group gone) supersedes any old
+      // gate, so `0` clears it instead of leaving a stale end date active
+      const bannedUntil = rawBannedUntil === undefined
+        ? 0 : normalizeBannedUntil(rawBannedUntil, serverNow);
+      const isForever = rawBannedUntil !== undefined
+        && (rawBannedUntil <= 0 || rawBannedUntil >= FOREVER_BAN_UNTIL);
+      const restrictionShort = rawBannedUntil === undefined
+        ? undefined
+        : isForever ? 'sem prazo (permanente)' : `até ${formatUnixStamp(rawBannedUntil)}`;
+      const isNewBlock = g.status !== 'BLOCKED';
+
+      // Refresh the stamp when the end date changed, so an extended ban
+      // keeps the probe gate accurate
+      if (isNewBlock || (g.bannedUntil || 0) !== bannedUntil) {
+        this.db.upsertGroupState({
+          chatId: g.chatId,
+          title: g.title,
+          otherMessagesCount: g.otherMessagesCount,
+          slowmodeSeconds: g.slowmodeSeconds,
+          slowmodeNextSendDate: g.slowmodeNextSendDate,
+          starsCost: g.starsCost,
+          lastSentAt: g.lastSentAt,
+          status: 'BLOCKED',
+          bannedUntil,
+          chatType: probe.chatType,
+          lastVerifiedAt: serverNow,
+          lastError: restrictionShort
+            ? `Restrição ${restrictionShort}` : 'Canal inacessível na revalidação',
+        });
+      }
+      if (isNewBlock && g.status !== 'STARS') {
+        this.db.addLog({
+          createdAt: serverNow,
+          chatId: g.chatId,
+          chatTitle: g.title,
+          messageSnippet: `Grupo "${g.title}" não aceita mensagens da conta `
+            + `(${restrictionShort || 'saída/banimento/trancado'}) — quarentenado.`,
+          linkUsed: '',
+          status: 'SKIPPED',
+        });
+      }
+      return 'blocked';
+    }
+
+    const starsCost = probe.starsCost || 0;
+    if (starsCost > 0) {
+      if (g.status !== 'STARS' && g.status !== 'BLOCKED') {
+        this.db.addLog({
+          createdAt: serverNow,
+          chatId: g.chatId,
+          chatTitle: g.title,
+          messageSnippet: `Grupo "${g.title}" passou a cobrar ${starsCost} estrelas — quarentenado.`,
+          linkUsed: '',
+          status: 'SKIPPED',
+        });
+      }
+      if (g.status !== 'STARS' || g.starsCost !== starsCost) {
+        this.db.upsertGroupState({
+          chatId: g.chatId,
+          title: g.title,
+          otherMessagesCount: g.otherMessagesCount,
+          slowmodeSeconds: g.slowmodeSeconds,
+          slowmodeNextSendDate: g.slowmodeNextSendDate,
+          starsCost,
+          lastSentAt: g.lastSentAt,
+          status: 'STARS',
+          lastError: undefined,
+          bannedUntil: 0,
+          chatType: probe.chatType,
+          lastVerifiedAt: serverNow,
+        });
+      }
+      return 'stars';
+    }
+
+    // Free again: reintegrate into the queue
+    this.db.upsertGroupState({
+      chatId: g.chatId,
+      title: g.title,
+      otherMessagesCount: g.otherMessagesCount,
+      slowmodeSeconds: probe.slowmodeSeconds !== undefined ? probe.slowmodeSeconds : g.slowmodeSeconds,
+      slowmodeNextSendDate: g.slowmodeNextSendDate,
+      starsCost: 0,
+      lastSentAt: g.lastSentAt,
+      status: 'READY',
+      lastError: undefined,
+      blockedAt: 0,
+      bannedUntil: 0,
+      chatType: probe.chatType,
+      lastVerifiedAt: serverNow,
+    });
+    this.db.addLog({
+      createdAt: serverNow,
+      chatId: g.chatId,
+      chatTitle: g.title,
+      messageSnippet: `Grupo "${g.title}" deixou de cobrar estrelas/bloquear e foi reintegrado à fila.`,
+      linkUsed: '',
+      status: 'SKIPPED',
+    });
+    return 'ready';
+  }
+
+  // Verifies write permission right before the send when the last
+  // authoritative verdict is stale: without it the send itself is the
+  // restriction test, and every blind attempt is a rejected write — the
+  // exact spam-pattern signal this avoids. Probe volume is budgeted per
+  // hour; beyond the budget the send proceeds as before so throughput is
+  // preserved
+  private async runPreFlightCheck(group: GroupStateRecord): Promise<PreFlightResult> {
+    const serverNow = Math.floor(Date.now() / 1000);
+    if (group.lastVerifiedAt && serverNow - group.lastVerifiedAt < PRE_FLIGHT_TTL_SECONDS) {
+      return 'fresh';
+    }
+    if (!this.probeChatCallback) return 'blind';
+
+    if (serverNow - this.preFlightWindowStartedAt >= 3600) {
+      this.preFlightWindowStartedAt = serverNow;
+      this.preFlightCount = 0;
+    }
+    if (this.preFlightCount >= PRE_FLIGHT_MAX_PER_HOUR) return 'blind';
+    this.preFlightCount++;
+
+    const probe = await this.probeChatCallback(group.chatId);
+    // Keep the revalidation fairness map fresh so the 30-min pass does not
+    // duplicate this probe
+    this.lastProbeAtByChat.set(group.chatId, Date.now());
+    if (!probe) return 'skip';
+
+    if (probe.canWrite && (probe.starsCost || 0) === 0 && probe.chatType !== 'channel') {
+      this.db.markGroupVerified(group.chatId, serverNow);
+      return 'verified';
+    }
+
+    return this.applyProbeVerdict(group, probe, serverNow);
+  }
+
+  // Realtime restriction stamp: Telegram pushes `updateChannelParticipant`
+  // the instant an admin or bot restricts the account, so the ban lands in
+  // the group state without any send attempt burning itself against it.
+  // Push stamps carry the same 24h trusted hold as send-confirmed bans, so a
+  // retaliatory unban/reban cycle cannot flip-flop the group back into play
+  applySelfRestriction(event: SelfRestrictionEvent) {
+    const serverNow = Math.floor(Date.now() / 1000);
+    const group = this.db.getGroupState(event.chatId);
+    if (!group) return;
+
+    if (!event.isRestricted) {
+      // Participant restored: drop the timed probe gate. A send-confirmed
+      // ban still holds through `blockedAt`, so only genuinely timed
+      // restrictions reopen the fast path
+      if (!group.bannedUntil) return;
+      this.db.upsertGroupState({
+        chatId: group.chatId,
+        title: group.title,
+        otherMessagesCount: group.otherMessagesCount,
+        slowmodeSeconds: group.slowmodeSeconds,
+        slowmodeNextSendDate: group.slowmodeNextSendDate,
+        starsCost: group.starsCost,
+        lastSentAt: group.lastSentAt,
+        status: group.status,
+        bannedUntil: 0,
+      });
+      return;
+    }
+
+    const rawBannedUntil = event.bannedUntil;
+    // A no-duration restriction push (kicked, removed) clears any old gate
+    // so rejoin detection keeps its fast cadence
+    const bannedUntil = rawBannedUntil === undefined
+      ? 0 : normalizeBannedUntil(rawBannedUntil, serverNow);
+    const isForever = rawBannedUntil !== undefined
+      && (rawBannedUntil <= 0 || rawBannedUntil >= FOREVER_BAN_UNTIL);
+    const restrictionShort = rawBannedUntil === undefined
+      ? 'sem prazo conhecido'
+      : isForever ? 'sem prazo (permanente)' : `até ${formatUnixStamp(rawBannedUntil)}`;
+
+    this.db.upsertGroupState({
+      chatId: group.chatId,
+      title: group.title,
+      otherMessagesCount: group.otherMessagesCount,
+      slowmodeSeconds: group.slowmodeSeconds,
+      slowmodeNextSendDate: group.slowmodeNextSendDate,
+      starsCost: group.starsCost,
+      lastSentAt: group.lastSentAt,
+      status: 'BLOCKED',
+      lastError: `Restrição ${restrictionShort}`,
+      blockedAt: serverNow,
+      bannedUntil,
+      lastVerifiedAt: serverNow,
+    });
+
+    // The orchestrator applies the same global quarantine as a send-level
+    // ban: a group that restricted one promo account is skipped fleet-wide
+    if (this.orchestratorClient) {
+      void this.orchestratorClient.reportSendResult(group.chatId, 'blocked');
+    }
+
+    const isRecentStamp = group.status === 'BLOCKED' && group.blockedAt
+      && (serverNow - group.blockedAt) < PUSH_RESTAMP_LOG_SECONDS;
+    if (!isRecentStamp) {
+      this.db.addLog({
+        createdAt: serverNow,
+        chatId: group.chatId,
+        chatTitle: group.title,
+        messageSnippet: `Grupo "${group.title}" restringiu a conta em tempo real `
+          + `(${restrictionShort}) — envios evitados antes da tentativa.`,
         linkUsed: '',
         status: 'SKIPPED',
       });
@@ -884,6 +1121,29 @@ export class AutomationScheduler {
         this.state.currentChatId = eligibleGroup.chatId;
         this.state.currentChatTitle = eligibleGroup.title;
 
+        // Pre-flight: with a stale write verdict the send itself would be
+        // the restriction test; a budgeted read-only probe stamps silent
+        // bans (and fresh stars prices) without burning a write attempt
+        const preFlight = await this.runPreFlightCheck(eligibleGroup);
+        if (preFlight === 'blocked' || preFlight === 'stars') {
+          if (this.orchestratorClient) {
+            // The probe found what the send would have: share the verdict
+            // with the fleet like a real attempt would
+            void this.orchestratorClient.reportSendResult(eligibleGroup.chatId, preFlight);
+          }
+          continue;
+        }
+        if (preFlight === 'skip') {
+          this.logWaitTransitionOnce(
+            'PREFLIGHT',
+            'Sondagem pré-envio indisponível (falha transitória) — nova tentativa em ~1min.',
+            Math.floor(Date.now() / 1000),
+          );
+          await this.sleep(60_000, signal);
+          continue;
+        }
+        // 'fresh' | 'verified' | 'blind' fall through to the send
+
         // Orchestrator claim: when orchestrated, only the slot owner may send.
         // Degraded mode (master unreachable) falls back to local sending.
         if (this.orchestratorClient) {
@@ -958,6 +1218,8 @@ export class AutomationScheduler {
           this.state.consecutiveSendsInRun++;
           this.state.sentInRoundCount++;
           this.db.resetGroupOtherMessages(eligibleGroup.chatId, timestamp);
+          // A delivered message is the strongest writability verdict there is
+          this.db.markGroupVerified(eligibleGroup.chatId, timestamp);
           this.db.addLog({
             createdAt: timestamp,
             chatId: eligibleGroup.chatId,
@@ -1032,6 +1294,7 @@ export class AutomationScheduler {
               status: 'BLOCKED',
               lastError: sendResult.error,
               blockedAt: timestamp,
+              bannedUntil: eligibleGroup.bannedUntil,
             });
           }
           this.db.addLog({

@@ -16,8 +16,25 @@ export interface TargetChatInfo {
 
 export interface ChatProbeResult {
   canWrite: boolean;
+  // Raw Telegram `ChatBannedRights.until_date` of the restriction that makes
+  // `canWrite` false (`0x7fffffff` and legacy `0` mean forever); absent when
+  // the probe cannot see a duration
+  bannedUntil?: number;
+  // 'channel' marks a broadcast channel, where non-admin members can never
+  // post; 'group' covers supergroups and basic groups. Gigagroups broadcast
+  // flag set with megagroup count as groups: their members can post
+  chatType?: 'group' | 'channel';
   starsCost?: number;
   slowmodeSeconds?: number;
+}
+
+// Realtime participant change that affects the signed-in account, extracted
+// from `updateChannelParticipant` pushes: the scheduler turns it into a ban
+// stamp without any extra API call
+export interface SelfRestrictionEvent {
+  chatId: string;
+  isRestricted: boolean;
+  bannedUntil?: number;
 }
 
 export interface InviteResolveResult {
@@ -96,6 +113,22 @@ export function extractMessagesFromGramJsUpdate(update: any): any[] {
   return [];
 }
 
+// `updateChannelParticipant` arrives bare or wrapped in update containers,
+// mirroring the message-extraction traversal
+function extractSelfParticipantUpdates(update: any): any[] {
+  if (!update || typeof update !== 'object') return [];
+
+  if (Array.isArray(update.updates)) {
+    return update.updates.flatMap((u: any) => extractSelfParticipantUpdates(u));
+  }
+
+  if (update.update) {
+    return extractSelfParticipantUpdates(update.update);
+  }
+
+  return update.className === 'UpdateChannelParticipant' ? [update] : [];
+}
+
 // Dispatches by link shape: private invite hash or public t.me username.
 // Non-Telegram links cannot be resolved and return undefined.
 export function parseCampaignLinkTarget(
@@ -113,16 +146,45 @@ export function parseCampaignLinkTarget(
 // Full-info flags do not reflect per-user bans: a kicked account still
 // resolves public supergroups without `left` or `bannedRights`, so
 // channels.getParticipant is the authoritative read-only write check.
-// Without it, revalidation keeps reintegrating banned groups and every
-// cycle burns a real send attempt that fails with USER_BANNED_IN_CHANNEL.
-export function getChannelParticipantCanWrite(participant: any): boolean {
-  if (!participant) return false;
+// The rights set is granular: an admin can forbid exactly plain text
+// (`send_plain`), exactly embedded links (`embed_links`) or the whole chat
+// (`view_messages`), and promo messages are plain text carrying t.me links —
+// so any of those flags alone makes a send attempt fail with
+// USER_BANNED_IN_CHANNEL. A removed account arrives in this TL layer as
+// `ChannelParticipantBanned` with `left: true` (the old `kicked` flag no
+// longer exists), and carries no usable `until_date` for scheduling
+const WRITE_RESTRICTING_RIGHTS = ['sendMessages', 'sendPlain', 'embedLinks', 'viewMessages'] as const;
+
+function getRightsBlockWrite(bannedRights: any): boolean {
+  if (!bannedRights) return false;
+  return WRITE_RESTRICTING_RIGHTS.some((right) => bannedRights[right] === true);
+}
+
+// Raw `until_date` of a restriction (`0` and `0x7fffffff` mean forever in
+// Telegram semantics); normalization into a scheduling value belongs to the
+// scheduler
+function getRawBannedUntil(bannedRights: any): number | undefined {
+  const untilDate = Number(bannedRights?.untilDate);
+  return Number.isFinite(untilDate) && untilDate >= 0 ? untilDate : undefined;
+}
+
+export interface ParticipantWriteCheck {
+  canWrite: boolean;
+  bannedUntil?: number;
+}
+
+export function getChannelParticipantWriteCheck(participant: any): ParticipantWriteCheck {
+  if (!participant) return { canWrite: false };
 
   if (participant.className === 'ChannelParticipantBanned') {
-    return participant.kicked !== true && participant.bannedRights?.sendMessages !== true;
+    if (participant.left === true) return { canWrite: false };
+    if (getRightsBlockWrite(participant.bannedRights)) {
+      return { canWrite: false, bannedUntil: getRawBannedUntil(participant.bannedRights) };
+    }
+    return { canWrite: true };
   }
 
-  return participant.className !== 'ChannelParticipantLeft';
+  return { canWrite: participant.className !== 'ChannelParticipantLeft' };
 }
 
 // Permanent failures mean the account definitively cannot post there
@@ -178,6 +240,14 @@ export class TelegramRunner {
 
   setExtractorEnabled(enabled: boolean) {
     this.extractorEnabled = enabled;
+  }
+
+  // Restriction events for the signed-in account are handed to the
+  // scheduler, which stamps them as group bans in realtime
+  private selfRestrictionHandler?: (event: SelfRestrictionEvent) => void;
+
+  setSelfRestrictionHandler(handler: (event: SelfRestrictionEvent) => void) {
+    this.selfRestrictionHandler = handler;
   }
 
   getIsConnected(): boolean {
@@ -321,6 +391,10 @@ export class TelegramRunner {
     this.lastUpdateReceivedAt = Date.now();
 
     try {
+      for (const participantUpdate of extractSelfParticipantUpdates(update)) {
+        this.handleSelfParticipantUpdate(participantUpdate);
+      }
+
       const messages = extractMessagesFromGramJsUpdate(update);
       for (const message of messages) {
         if (!message || !message.peerId) continue;
@@ -349,6 +423,31 @@ export class TelegramRunner {
     } catch {
       // Ignore update parsing errors
     }
+  }
+
+  // Turns a participant change that affects the signed-in account into a
+  // restriction event: admins and anti-spam bots restrict the account while
+  // the daemon is connected, and the push makes the ban visible before a
+  // send attempt burns itself against it
+  private handleSelfParticipantUpdate(update: any) {
+    const chatId = getChatIdFromMtpPeer({ channelId: update?.channelId });
+    if (!chatId || !this.targetChatMap.has(chatId)) return;
+
+    const selfUserId = this.accountInfo?.userId || this.getAccountInfo()?.userId;
+    if (!selfUserId) {
+      // Identity is normally captured at connect time; a push arriving
+      // before that is dropped and a warm-up fetch is kicked off
+      void this.captureAccountInfo();
+      return;
+    }
+    if (String(update?.userId) !== selfUserId) return;
+
+    const check = getChannelParticipantWriteCheck(update?.newParticipant);
+    this.selfRestrictionHandler?.({
+      chatId,
+      isRestricted: !check.canWrite,
+      bannedUntil: check.bannedUntil,
+    });
   }
 
   private extractFromMessage(chatId: string, message: any) {
@@ -469,14 +568,20 @@ export class TelegramRunner {
 
         // Pre-flight write check: no point trying to send when the channel
         // itself says we cannot (left the group, personally banned from
-        // writing, or the group is locked for non-admins)
+        // writing, or the group is locked for non-admins). Channel flags can
+        // miss per-user bans in min contexts, so the participant read below
+        // stays authoritative for the final verdict
         const channelObj = (result?.chats || []).find((chat: any) => chat?.className === 'Channel')
           || (result?.chats || [])[0];
         const cannotWriteFromFlags = Boolean(channelObj?.left)
-          || channelObj?.bannedRights?.sendMessages === true
-          || channelObj?.defaultBannedRights?.sendMessages === true;
+          || getRightsBlockWrite(channelObj?.bannedRights)
+          || getRightsBlockWrite(channelObj?.defaultBannedRights);
+        const bannedUntilFromFlags = getRightsBlockWrite(channelObj?.bannedRights)
+          ? getRawBannedUntil(channelObj?.bannedRights)
+          : undefined;
 
         let canWrite = !cannotWriteFromFlags;
+        let bannedUntil = bannedUntilFromFlags;
         if (canWrite) {
           try {
             const participantResult = await this.client.invoke(
@@ -485,7 +590,9 @@ export class TelegramRunner {
                 participant: new GramJs.InputPeerSelf(),
               }),
             ) as any;
-            canWrite = getChannelParticipantCanWrite(participantResult?.participant);
+            const participantCheck = getChannelParticipantWriteCheck(participantResult?.participant);
+            canWrite = participantCheck.canWrite;
+            bannedUntil = participantCheck.bannedUntil;
           } catch (participantErr: any) {
             const participantMessage = String(
               participantErr?.errorMessage || participantErr?.message || participantErr,
@@ -502,6 +609,9 @@ export class TelegramRunner {
 
         return {
           canWrite,
+          bannedUntil,
+          chatType: channelObj?.broadcast === true && channelObj?.megagroup !== true
+            ? 'channel' : 'group',
           starsCost: Number(fullChat?.sendPaidMessagesStars || 0),
           slowmodeSeconds: Number(fullChat?.slowmodeSeconds || 0),
         };
@@ -522,6 +632,7 @@ export class TelegramRunner {
 
       return {
         canWrite,
+        chatType: 'group',
         starsCost: 0,
         slowmodeSeconds: Number(result?.fullChat?.slowmodeSeconds || 0),
       };
@@ -756,8 +867,21 @@ export class TelegramRunner {
       // Wait 3 to 5 seconds during typing simulation
       const typingMs = 3000 + Math.floor(Math.random() * 2000);
       await new Promise((r) => setTimeout(r, typingMs));
-    } catch {
-      // Non-fatal if typing action fails
+    } catch (typingErr: any) {
+      // `messages.setTyping` is a write-path call: Telegram answers it with
+      // the same permanent ban family as `sendMessage` (per the official RPC
+      // error database), so a restriction surfaces here seconds before the
+      // message itself would burn an attempt
+      const typingMessage = String(typingErr?.message || typingErr);
+
+      if (/AUTH_KEY_DUPLICATED|AUTH_KEY_UNREGISTERED|SESSION_REVOKED|USER_DEACTIVATED/.test(typingMessage)) {
+        return { success: false, isSessionLost: true, error: typingMessage };
+      }
+
+      if (getIsPermanentParticipantError(typingMessage)) {
+        return { success: false, error: typingMessage };
+      }
+      // Transient typing failures stay non-fatal
     }
 
     // 2. Send the message

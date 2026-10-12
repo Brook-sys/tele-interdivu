@@ -281,7 +281,11 @@ export class OrchestratorCoordinator {
       'UPDATE orchestrator_grants SET result = ? WHERE id = ?',
     ).run(result ?? 'error', open.id);
 
-    // Global quarantine propagation: stars/blocked apply to every worker
+    // Global quarantine propagation: stars/blocked apply to every worker.
+    // Stars is a group-level property and travels correctly; a restriction
+    // (`blocked`) is per-account by API semantics, but propagation stays
+    // global because a group that restricted one promo account tends to
+    // restrict the other carrying the same content — safety over capacity
     if (result === 'stars' || result === 'blocked') {
       const titleRow = this.dbRaw().prepare(
         'SELECT chat_title FROM orchestrator_grants WHERE chat_id = ? ORDER BY id DESC LIMIT 1',

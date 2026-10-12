@@ -118,6 +118,18 @@ export interface GroupStateRecord {
   // Unix seconds of the last send-level permanent block (USER_BANNED etc).
   // Probe-only blocks leave it unset so they keep the fast revalidation cadence
   blockedAt?: number;
+  // Unix seconds until which a restriction stamp suppresses revalidation
+  // probing. Scheduling value normalized from Telegram's
+  // `ChatBannedRights.until_date`; "forever" stamps are capped to a
+  // reconsider horizon so a late admin unban is still noticed. `0` clears
+  // the gate
+  bannedUntil?: number;
+  // 'channel' marks a broadcast channel, where non-admin members can never
+  // post; 'group' covers supergroups and basic groups
+  chatType?: 'group' | 'channel';
+  // Unix seconds of the last authoritative write verdict (probe, realtime
+  // push or successful send) — gates pre-send verification freshness
+  lastVerifiedAt?: number;
   updatedAt: number;
 }
 
@@ -305,6 +317,9 @@ export class AutomationDatabase {
         status TEXT NOT NULL DEFAULT 'READY',
         last_error TEXT,
         blocked_at INTEGER,
+        banned_until INTEGER,
+        chat_type TEXT,
+        last_verified_at INTEGER,
         updated_at INTEGER NOT NULL
       );
 
@@ -402,6 +417,21 @@ export class AutomationDatabase {
     }
     try {
       this.db.exec('ALTER TABLE group_state ADD COLUMN blocked_at INTEGER');
+    } catch {
+      // Column already exists
+    }
+    try {
+      this.db.exec('ALTER TABLE group_state ADD COLUMN banned_until INTEGER');
+    } catch {
+      // Column already exists
+    }
+    try {
+      this.db.exec('ALTER TABLE group_state ADD COLUMN chat_type TEXT');
+    } catch {
+      // Column already exists
+    }
+    try {
+      this.db.exec('ALTER TABLE group_state ADD COLUMN last_verified_at INTEGER');
     } catch {
       // Column already exists
     }
@@ -1379,8 +1409,9 @@ export class AutomationDatabase {
     this.db.prepare(`
       INSERT INTO group_state (
         chat_id, title, access_hash, last_sent_at, other_messages_count, slowmode_seconds,
-        slowmode_next_send_date, stars_cost, status, last_error, blocked_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        slowmode_next_send_date, stars_cost, status, last_error, blocked_at, banned_until,
+        chat_type, last_verified_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(chat_id) DO UPDATE SET
         title = excluded.title,
         access_hash = coalesce(excluded.access_hash, group_state.access_hash),
@@ -1392,6 +1423,9 @@ export class AutomationDatabase {
         status = excluded.status,
         last_error = excluded.last_error,
         blocked_at = coalesce(excluded.blocked_at, group_state.blocked_at),
+        banned_until = coalesce(excluded.banned_until, group_state.banned_until),
+        chat_type = coalesce(excluded.chat_type, group_state.chat_type),
+        last_verified_at = coalesce(excluded.last_verified_at, group_state.last_verified_at),
         updated_at = excluded.updated_at
     `).run(
       record.chatId,
@@ -1405,8 +1439,18 @@ export class AutomationDatabase {
       record.status,
       record.lastError ?? null,
       record.blockedAt ?? null,
+      record.bannedUntil ?? null,
+      record.chatType ?? null,
+      record.lastVerifiedAt ?? null,
       now,
     );
+  }
+
+  markGroupVerified(chatId: string, verifiedAt: number) {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare(`
+      UPDATE group_state SET last_verified_at = ?, updated_at = ? WHERE chat_id = ?
+    `).run(verifiedAt, now, chatId);
   }
 
   setGroupStarsCost(chatId: string, starsCost: number) {
@@ -1491,6 +1535,9 @@ export class AutomationDatabase {
       status: row.status,
       lastError: row.last_error ? String(row.last_error) : undefined,
       blockedAt: row.blocked_at ? Number(row.blocked_at) : undefined,
+      bannedUntil: row.banned_until ? Number(row.banned_until) : undefined,
+      chatType: row.chat_type === 'channel' || row.chat_type === 'group' ? row.chat_type : undefined,
+      lastVerifiedAt: row.last_verified_at ? Number(row.last_verified_at) : undefined,
       updatedAt: Number(row.updated_at),
     }));
   }
@@ -1510,6 +1557,9 @@ export class AutomationDatabase {
       status: row.status,
       lastError: row.last_error ? String(row.last_error) : undefined,
       blockedAt: row.blocked_at ? Number(row.blocked_at) : undefined,
+      bannedUntil: row.banned_until ? Number(row.banned_until) : undefined,
+      chatType: row.chat_type === 'channel' || row.chat_type === 'group' ? row.chat_type : undefined,
+      lastVerifiedAt: row.last_verified_at ? Number(row.last_verified_at) : undefined,
       updatedAt: Number(row.updated_at),
     };
   }

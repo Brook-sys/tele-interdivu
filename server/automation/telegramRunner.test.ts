@@ -2,39 +2,55 @@ import { describe, expect, it } from 'vitest';
 
 import {
   extractMessagesFromGramJsUpdate,
-  getChannelParticipantCanWrite,
+  getChannelParticipantWriteCheck,
   getIsPermanentParticipantError,
 } from './telegramRunner';
 
-describe('getChannelParticipantCanWrite', () => {
+describe('getChannelParticipantWriteCheck', () => {
   it('allows regular members, admins and creators', () => {
-    expect(getChannelParticipantCanWrite({ className: 'ChannelParticipantSelf' })).toBe(true);
-    expect(getChannelParticipantCanWrite({ className: 'ChannelParticipant' })).toBe(true);
-    expect(getChannelParticipantCanWrite({ className: 'ChannelParticipantAdmin' })).toBe(true);
-    expect(getChannelParticipantCanWrite({ className: 'ChannelParticipantCreator' })).toBe(true);
+    expect(getChannelParticipantWriteCheck({ className: 'ChannelParticipantSelf' }).canWrite).toBe(true);
+    expect(getChannelParticipantWriteCheck({ className: 'ChannelParticipant' }).canWrite).toBe(true);
+    expect(getChannelParticipantWriteCheck({ className: 'ChannelParticipantAdmin' }).canWrite).toBe(true);
+    expect(getChannelParticipantWriteCheck({ className: 'ChannelParticipantCreator' }).canWrite).toBe(true);
   });
 
-  it('blocks kicked and write-banned participants', () => {
-    expect(getChannelParticipantCanWrite({
+  it('blocks removed participants without a probe gate', () => {
+    expect(getChannelParticipantWriteCheck({
       className: 'ChannelParticipantBanned',
-      kicked: true,
-    })).toBe(false);
-    expect(getChannelParticipantCanWrite({
+      left: true,
+      bannedRights: { viewMessages: true },
+    })).toEqual({ canWrite: false });
+  });
+
+  it('blocks write-restricting granular bans and reports their end date', () => {
+    expect(getChannelParticipantWriteCheck({
       className: 'ChannelParticipantBanned',
-      bannedRights: { sendMessages: true },
-    })).toBe(false);
+      bannedRights: { sendMessages: true, untilDate: 1765540800 },
+    })).toEqual({ canWrite: false, bannedUntil: 1765540800 });
+    expect(getChannelParticipantWriteCheck({
+      className: 'ChannelParticipantBanned',
+      bannedRights: { sendPlain: true },
+    }).canWrite).toBe(false);
+    expect(getChannelParticipantWriteCheck({
+      className: 'ChannelParticipantBanned',
+      bannedRights: { embedLinks: true },
+    }).canWrite).toBe(false);
+    expect(getChannelParticipantWriteCheck({
+      className: 'ChannelParticipantBanned',
+      bannedRights: { viewMessages: true, untilDate: 0 },
+    })).toEqual({ canWrite: false, bannedUntil: 0 });
   });
 
   it('allows participants banned from other actions only', () => {
-    expect(getChannelParticipantCanWrite({
+    expect(getChannelParticipantWriteCheck({
       className: 'ChannelParticipantBanned',
       bannedRights: { sendMessages: false, sendPhotos: true },
-    })).toBe(true);
+    })).toEqual({ canWrite: true });
   });
 
   it('blocks left participants and missing payloads', () => {
-    expect(getChannelParticipantCanWrite({ className: 'ChannelParticipantLeft' })).toBe(false);
-    expect(getChannelParticipantCanWrite(undefined)).toBe(false);
+    expect(getChannelParticipantWriteCheck({ className: 'ChannelParticipantLeft' })).toEqual({ canWrite: false });
+    expect(getChannelParticipantWriteCheck(undefined)).toEqual({ canWrite: false });
   });
 });
 
